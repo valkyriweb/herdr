@@ -54,14 +54,16 @@ pub fn session_ref_from_report(
     source: &str,
     agent: &str,
     agent_session_id: Option<String>,
-    _agent_session_path: Option<String>,
+    agent_session_path: Option<String>,
 ) -> Option<AgentSessionRef> {
     if !is_official_agent_source(source, agent) {
         return None;
     }
 
-    if agent == "pi" || agent == "omp" {
-        return _agent_session_path
+    // pi, omp, and prime-agent (pi-built) resume from a session file path, so
+    // prefer it and fall back to the id; every other agent resumes by id only.
+    if matches!(agent, "pi" | "omp" | "prime-agent") {
+        return agent_session_path
             .and_then(AgentSessionRef::path)
             .or_else(|| agent_session_id.and_then(AgentSessionRef::id));
     }
@@ -553,6 +555,32 @@ mod tests {
             session_ref_from_report("herdr:omp", "omp", None, Some("relative.jsonl".into()))
                 .is_none()
         );
+
+        // prime-agent reports under the herdr:pi source with its own label and,
+        // like pi, resumes from a session file path.
+        let prime_session = absolute_test_path("prime-session.jsonl");
+        let session_ref = session_ref_from_report(
+            "herdr:pi",
+            "prime-agent",
+            Some("prime-id".into()),
+            Some(prime_session.clone()),
+        )
+        .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Path);
+        assert_eq!(session_ref.value, prime_session);
+
+        let session_ref =
+            session_ref_from_report("herdr:pi", "prime-agent", Some("prime-id".into()), None)
+                .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "prime-id");
+        assert!(session_ref_from_report(
+            "herdr:pi",
+            "prime-agent",
+            None,
+            Some("relative.jsonl".into())
+        )
+        .is_none());
 
         assert!(
             session_ref_from_report("herdr:claude", "claude", None, Some(claude_session)).is_none()
