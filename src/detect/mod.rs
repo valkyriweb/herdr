@@ -65,10 +65,11 @@ pub enum Agent {
     Qwen,
     Maki,
     Muse,
+    Rusty,
 }
 
 impl Agent {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Pi,
         Self::Prime,
         Self::Claude,
@@ -93,6 +94,7 @@ impl Agent {
         Self::Qwen,
         Self::Maki,
         Self::Muse,
+        Self::Rusty,
     ];
 
     pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
@@ -146,6 +148,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::Rusty => "rusty",
     }
 }
 
@@ -181,6 +184,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::Rusty => "rusty",
     }
 }
 
@@ -221,6 +225,9 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
+        // Rusty's `rusty` launcher script leads the pane's foreground job for
+        // the whole session, so the wrapped script name identifies the agent.
+        "rusty" => Some(Agent::Rusty),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }
@@ -821,6 +828,8 @@ mod tests {
             Some(Agent::Muse)
         );
         assert_eq!(identify_agent("prime-agent"), Some(Agent::Prime));
+        assert_eq!(identify_agent("rusty"), Some(Agent::Rusty));
+        assert_eq!(identify_agent("rustyd"), None);
     }
 
     #[test]
@@ -893,6 +902,7 @@ mod tests {
             (Agent::Qwen, "qwen"),
             (Agent::Maki, "maki"),
             (Agent::Muse, "muse"),
+            (Agent::Rusty, "rusty"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {

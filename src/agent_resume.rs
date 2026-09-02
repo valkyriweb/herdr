@@ -218,6 +218,11 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:rusty", "rusty", AgentSessionRefKind::Id) => {
+            // Rusty's launcher reports the durable session name as the id and
+            // reopens it with `rusty --resume <name>`; it has no path form.
+            vec!["rusty".into(), "--resume".into(), session_ref.value.clone()]
+        }
         _ => return None,
     };
 
@@ -256,6 +261,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:cursor", "cursor")
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
+            | ("herdr:rusty", "rusty")
     )
 }
 
@@ -486,6 +492,16 @@ mod tests {
             .argv,
             vec!["grok", "--resume", "grok-session"]
         );
+        assert_eq!(
+            plan(
+                "herdr:rusty",
+                "rusty",
+                &AgentSessionRef::id("fc3c45bb-e1c6-41ab-9c81-f94a733bc1a8").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["rusty", "--resume", "fc3c45bb-e1c6-41ab-9c81-f94a733bc1a8"]
+        );
     }
 
     #[test]
@@ -649,6 +665,29 @@ mod tests {
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "agy-id");
+
+        // Rusty reports its durable session name as an id; a session path is
+        // ignored because `rusty --resume` only takes names.
+        let rusty_session = absolute_test_path("rusty-session.jsonl");
+        let session_ref = session_ref_from_report(
+            "herdr:rusty",
+            "rusty",
+            Some("rusty-id".into()),
+            Some(rusty_session.clone()),
+        )
+        .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "rusty-id");
+        assert!(
+            session_ref_from_report("herdr:rusty", "rusty", None, Some(rusty_session)).is_none()
+        );
+        assert!(
+            session_ref_from_report("custom:rusty", "rusty", Some("rusty-id".into()), None)
+                .is_none()
+        );
+        assert!(
+            session_ref_from_report("herdr:pi", "rusty", Some("rusty-id".into()), None).is_none()
+        );
     }
 
     #[test]
@@ -802,6 +841,42 @@ mod tests {
             "herdr:antigravity_cli",
             "agy",
             &AgentSessionRef::path(&agy_session).unwrap()
+        )
+        .is_none());
+        let prime_session = absolute_test_path("prime-session.jsonl");
+        assert!(session_ref_from_snapshot(
+            "herdr:pi",
+            "prime-agent",
+            AgentSessionRefKind::Path,
+            &prime_session
+        )
+        .is_some());
+        assert!(session_ref_from_snapshot(
+            "herdr:pi",
+            "prime-agent",
+            AgentSessionRefKind::Id,
+            "prime-session"
+        )
+        .is_some());
+        assert!(session_ref_from_snapshot(
+            "herdr:rusty",
+            "rusty",
+            AgentSessionRefKind::Id,
+            "rusty-session"
+        )
+        .is_some());
+        let rusty_session = absolute_test_path("rusty-session");
+        assert!(session_ref_from_snapshot(
+            "herdr:rusty",
+            "rusty",
+            AgentSessionRefKind::Path,
+            &rusty_session
+        )
+        .is_none());
+        assert!(plan(
+            "herdr:rusty",
+            "rusty",
+            &AgentSessionRef::path(&rusty_session).unwrap()
         )
         .is_none());
     }
