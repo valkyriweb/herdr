@@ -104,7 +104,7 @@ pub fn session_ref_from_snapshot(
         return None;
     }
     let session_ref = match (agent, kind) {
-        ("pi" | "omp", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
+        ("pi" | "omp" | "prime-agent", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
         (_, AgentSessionRefKind::Id) => AgentSessionRef::id(value)?,
         _ => return None,
     };
@@ -152,6 +152,15 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         }
         ("herdr:pi", "pi", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             vec!["pi".into(), "--session".into(), session_ref.value.clone()]
+        }
+        ("herdr:pi", "prime-agent", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
+            // prime-agent is pi-built and reports under the herdr:pi source with
+            // its own label; it resumes natively via `prime-agent --resume <ref>`.
+            vec![
+                "prime-agent".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ]
         }
         ("herdr:omp", "omp", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             // omp resume is `-r, --resume=<value>` (ID prefix or path); it has no
@@ -236,6 +245,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:omp", "omp")
             | ("herdr:mastracode", "mastracode")
             | ("herdr:pi", "pi")
+            | ("herdr:pi", "prime-agent")
             | ("herdr:hermes", "hermes")
             | ("herdr:opencode", "opencode")
             | ("herdr:qodercli", "qodercli")
@@ -375,6 +385,16 @@ mod tests {
             .unwrap()
             .argv,
             vec!["omp", format!("--resume={omp_session}").as_str()]
+        );
+        assert_eq!(
+            plan(
+                "herdr:pi",
+                "prime-agent",
+                &AgentSessionRef::id("prime-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["prime-agent", "--resume", "prime-session"]
         );
         assert_eq!(
             plan(
