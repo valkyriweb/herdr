@@ -11,6 +11,8 @@ const originalEnvironment = {
   HERDR_OMP_IDLE_DEBOUNCE_MS: process.env.HERDR_OMP_IDLE_DEBOUNCE_MS,
   HERDR_PANE_ID: process.env.HERDR_PANE_ID,
   HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
+  HERDR_PI_VARIANT: process.env.HERDR_PI_VARIANT,
+  PI_LAUNCHER: process.env.PI_LAUNCHER,
 };
 
 let server: Server | undefined;
@@ -240,6 +242,40 @@ test("OMP accepts POSIX and Windows session paths", async () => {
   expect(isAbsoluteSessionPath("relative/omp-session.jsonl")).toBe(false);
 });
 
+test("Pi fork reports pii as its Herdr agent identifier", async () => {
+  const requests = await startRecordingServer("pii-identity");
+  process.env.PI_LAUNCHER = "pi";
+  process.env.HERDR_PI_VARIANT = "pii";
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => true));
+  await waitFor(() => requestStates(requests).length === 1);
+
+  const report = requests.find(
+    (request) => isRecord(request) && request.method === "pane.report_agent",
+  );
+  expect(isRecord(report) && isRecord(report.params) ? report.params.agent : null).toBe("pii");
+});
+
+test("Vanilla Pi ignores an inherited fork launcher marker", async () => {
+  const requests = await startRecordingServer("pi-vanilla-identity");
+  process.env.PI_LAUNCHER = "pii";
+  delete process.env.HERDR_PI_VARIANT;
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => true));
+  await waitFor(() => requestStates(requests).length === 1);
+
+  const report = requests.find(
+    (request) => isRecord(request) && request.method === "pane.report_agent",
+  );
+  expect(isRecord(report) && isRecord(report.params) ? report.params.agent : null).toBe("pi");
+});
+
 test("Pi reports idle only after the agent settles", async () => {
   const requests = await startRecordingServer("pi-settled");
   const { handlers, pi } = createExtensionHarness();
@@ -313,6 +349,52 @@ test("Pi settlement preserves explicit blocked-state precedence", async () => {
   eventHandlers.get("herdr:blocked")?.({ active: false }, context);
   await waitFor(() => requestStates(requests).length === 4);
   expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "idle"]);
+});
+
+test("Pi preserves a blocked transition while a state report is in flight", async () => {
+  const recordingSocketPath = join(tmpdir(), `herdr-pi-blocked-order-${process.pid}.sock`);
+  socketPath = recordingSocketPath;
+  await rm(recordingSocketPath, { force: true });
+
+  const requests: unknown[] = [];
+  let acknowledgeFirstReport: (() => void) | undefined;
+  const recordingServer = createServer((socket) => {
+    let input = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      input += chunk;
+      const newline = input.indexOf("\n");
+      if (newline === -1) {
+        return;
+      }
+      requests.push(JSON.parse(input.slice(0, newline)));
+      if (requestStates(requests).length === 1) {
+        acknowledgeFirstReport = () => socket.end("{}\n");
+        return;
+      }
+      socket.end("{}\n");
+    });
+  });
+  server = recordingServer;
+  await new Promise<void>((resolve, reject) => {
+    recordingServer.once("error", reject);
+    recordingServer.listen(recordingSocketPath, resolve);
+  });
+
+  configureIntegrationEnvironment(recordingSocketPath);
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => false));
+  await waitFor(() => acknowledgeFirstReport !== undefined);
+
+  eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" }, {});
+  eventHandlers.get("herdr:blocked")?.({ active: false }, {});
+  acknowledgeFirstReport?.();
+
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["working", "blocked", "working"]);
 });
 
 test("Pi reports the session replacement source", async () => {

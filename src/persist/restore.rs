@@ -1477,11 +1477,15 @@ mod tests {
         assert_eq!(next_public_pane_number, 3);
     }
 
-    #[tokio::test]
     #[cfg(unix)]
-    async fn native_agent_restore_defers_runtime_launch() {
+    fn native_agent_snapshot(
+        source: &str,
+        agent: &str,
+        kind: crate::agent_resume::AgentSessionRefKind,
+        value: &str,
+    ) -> SessionSnapshot {
         let cwd = std::env::current_dir().unwrap();
-        let snapshot = SessionSnapshot {
+        SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
             workspaces: vec![WorkspaceSnapshot {
                 id: Some("workspace".into()),
@@ -1503,10 +1507,10 @@ mod tests {
                             agent_name: None,
                             managed_agent_kind: None,
                             agent_session: Some(super::super::snapshot::PaneAgentSessionSnapshot {
-                                source: "herdr:codex".into(),
-                                agent: "codex".into(),
-                                kind: crate::agent_resume::AgentSessionRefKind::Id,
-                                value: "codex-session".into(),
+                                source: source.into(),
+                                agent: agent.into(),
+                                kind,
+                                value: value.into(),
                             }),
                             launch_argv: None,
                         },
@@ -1522,7 +1526,18 @@ mod tests {
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
-        };
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn native_agent_restore_defers_runtime_launch() {
+        let snapshot = native_agent_snapshot(
+            "herdr:codex",
+            "codex",
+            crate::agent_resume::AgentSessionRefKind::Id,
+            "codex-session",
+        );
         let (events, _event_rx) = mpsc::channel(4);
 
         let (_workspaces, terminals, runtimes) = restore(
@@ -1579,6 +1594,45 @@ mod tests {
             handoff_runtimes.is_empty(),
             "handoff restore should not replace pending native agent resume with a shell runtime"
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn native_pii_agent_restore_uses_pii_session_launcher() {
+        let session_path = test_session_path("pii-session.jsonl");
+        let snapshot = native_agent_snapshot(
+            "herdr:pi",
+            "pii",
+            crate::agent_resume::AgentSessionRefKind::Path,
+            &session_path,
+        );
+        let (events, _event_rx) = mpsc::channel(4);
+
+        let (_workspaces, terminals, runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            true,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+
+        let terminal = terminals
+            .values()
+            .next()
+            .expect("native pii restore should create terminal state");
+        let plan = terminal
+            .pending_agent_resume_plan
+            .as_ref()
+            .expect("native pii restore should defer its resume");
+        assert_eq!(plan.agent, "pii");
+        assert_eq!(plan.argv, vec!["pii", "--session", session_path.as_str()]);
+        assert!(runtimes.is_empty());
     }
 
     #[tokio::test]

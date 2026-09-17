@@ -146,6 +146,22 @@ pub fn agent_label(agent: Agent) -> &'static str {
     }
 }
 
+/// Preserve the `pii` launcher label even though detection models it as `Agent::Pi`.
+pub fn agent_label_for_input(label: &str, agent: Agent) -> &'static str {
+    if agent == Agent::Pi && normalized_agent_lookup_name(path_basename(label)) == "pii" {
+        return "pii";
+    }
+    agent_label(agent)
+}
+
+/// Select the launcher executable for a user-provided agent kind.
+pub fn interactive_agent_executable_for_label(label: &str, agent: Agent) -> &'static str {
+    if agent_label_for_input(label, agent) == "pii" {
+        return "pii";
+    }
+    interactive_agent_executable(agent)
+}
+
 pub fn interactive_agent_executable(agent: Agent) -> &'static str {
     match agent {
         Agent::Pi => "pi",
@@ -193,7 +209,7 @@ pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
 fn lookup_agent(name: &str) -> Option<Agent> {
     let name = path_basename(name);
     match name {
-        "pi" => Some(Agent::Pi),
+        "pi" | "pii" => Some(Agent::Pi),
         "claude" | "claude-code" => Some(Agent::Claude),
         "codex" => Some(Agent::Codex),
         "gemini" => Some(Agent::Gemini),
@@ -316,7 +332,7 @@ pub fn should_skip_state_update(agent: Option<Agent>, screen_content: &str) -> b
 pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),
-        ("herdr:pi", "pi")
+        ("herdr:pi", "pi" | "pii")
             | ("herdr:omp", "omp")
             | ("herdr:mastracode", "mastracode")
             | ("herdr:opencode", "opencode")
@@ -769,6 +785,7 @@ mod tests {
     #[test]
     fn identify_known_agents() {
         assert_eq!(identify_agent("pi"), Some(Agent::Pi));
+        assert_eq!(identify_agent("pii"), Some(Agent::Pi));
         assert_eq!(identify_agent("claude"), Some(Agent::Claude));
         assert_eq!(identify_agent("claude-code"), Some(Agent::Claude));
         assert_eq!(identify_agent("codex"), Some(Agent::Codex));
@@ -820,6 +837,7 @@ mod tests {
     #[test]
     fn parse_known_agent_labels() {
         assert_eq!(parse_agent_label("pi"), Some(Agent::Pi));
+        assert_eq!(parse_agent_label("pii"), Some(Agent::Pi));
         assert_eq!(parse_agent_label("claude"), Some(Agent::Claude));
         assert_eq!(parse_agent_label("cursor-agent"), Some(Agent::Cursor));
         assert_eq!(parse_agent_label("devin-cli"), Some(Agent::Devin));
@@ -891,6 +909,22 @@ mod tests {
         for (agent, executable) in expected {
             assert_eq!(interactive_agent_executable(agent), executable);
         }
+        assert_eq!(agent_label_for_input("pi", Agent::Pi), "pi");
+        assert_eq!(agent_label_for_input("pii", Agent::Pi), "pii");
+        assert_eq!(agent_label_for_input("PII.EXE", Agent::Pi), "pii");
+        assert_eq!(agent_label_for_input("/custom/bin/pii", Agent::Pi), "pii");
+        assert_eq!(
+            interactive_agent_executable_for_label("pii", Agent::Pi),
+            "pii"
+        );
+        assert_eq!(
+            interactive_agent_executable_for_label("PII.EXE", Agent::Pi),
+            "pii"
+        );
+        assert_eq!(
+            interactive_agent_executable_for_label("/custom/bin/pii", Agent::Pi),
+            "pii"
+        );
     }
 
     #[test]
@@ -903,6 +937,7 @@ mod tests {
 
     #[test]
     fn mastracode_is_hook_authority_without_screen_manifest() {
+        assert!(full_lifecycle_hook_authority("herdr:pi", "pii"));
         assert!(full_lifecycle_hook_authority(
             "herdr:mastracode",
             "mastracode"
