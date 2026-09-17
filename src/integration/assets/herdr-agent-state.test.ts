@@ -11,6 +11,7 @@ const originalEnvironment = {
   HERDR_OMP_IDLE_DEBOUNCE_MS: process.env.HERDR_OMP_IDLE_DEBOUNCE_MS,
   HERDR_PANE_ID: process.env.HERDR_PANE_ID,
   HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
+  HERDR_PI_VARIANT: process.env.HERDR_PI_VARIANT,
   PI_LAUNCHER: process.env.PI_LAUNCHER,
 };
 
@@ -243,7 +244,8 @@ test("OMP accepts POSIX and Windows session paths", async () => {
 
 test("Pi fork reports pii as its Herdr agent identifier", async () => {
   const requests = await startRecordingServer("pii-identity");
-  process.env.PI_LAUNCHER = "pii";
+  process.env.PI_LAUNCHER = "pi";
+  process.env.HERDR_PI_VARIANT = "pii";
   const { handlers, pi } = createExtensionHarness();
   const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
   install(pi);
@@ -257,9 +259,10 @@ test("Pi fork reports pii as its Herdr agent identifier", async () => {
   expect(isRecord(report) && isRecord(report.params) ? report.params.agent : null).toBe("pii");
 });
 
-test("Vanilla Pi reports pi without the fork launcher marker", async () => {
+test("Vanilla Pi ignores an inherited fork launcher marker", async () => {
   const requests = await startRecordingServer("pi-vanilla-identity");
-  delete process.env.PI_LAUNCHER;
+  process.env.PI_LAUNCHER = "pii";
+  delete process.env.HERDR_PI_VARIANT;
   const { handlers, pi } = createExtensionHarness();
   const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
   install(pi);

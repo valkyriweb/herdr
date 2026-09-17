@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=10
+// HERDR_INTEGRATION_VERSION=11
 // @ts-nocheck
 
 import net from "node:net";
@@ -14,9 +14,9 @@ const socketEndpoint =
   process.platform === "win32" && socketPath ? `\\\\.\\pipe\\${socketPath}` : socketPath;
 const paneId = process.env.HERDR_PANE_ID;
 const source = "herdr:pi";
-// `pii` is the local fork launcher; keep the integration asset shared with
-// vanilla Pi while preserving the launcher-specific Herdr agent identity.
-const agent = process.env.PI_LAUNCHER === "pii" ? "pii" : "pi";
+// `pii` sets this integration-specific marker after sourcing user env; the
+// vanilla launcher clears it so an inherited fork marker cannot misidentify pi.
+const agent = process.env.HERDR_PI_VARIANT === "pii" ? "pii" : "pi";
 
 function enabled() {
   return HERDR_ENV === "1" && !!socketPath && !!paneId;
