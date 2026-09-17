@@ -194,7 +194,7 @@ pub(super) fn normalize_reported_agent_label(agent: &str) -> Option<String> {
         return None;
     }
     if let Some(agent) = crate::detect::parse_agent_label(trimmed) {
-        return Some(crate::detect::agent_label(agent).to_string());
+        return Some(crate::detect::agent_label_for_input(trimmed, agent).to_string());
     }
     Some(trimmed.to_string())
 }
@@ -281,6 +281,20 @@ pub(super) fn normalize_metadata_tokens(
 #[cfg(test)]
 mod metadata_token_tests {
     use super::*;
+
+    #[test]
+    fn reported_agent_normalization_preserves_the_pii_label() {
+        assert_eq!(normalize_reported_agent_label("pi"), Some("pi".into()));
+        assert_eq!(normalize_reported_agent_label("pii"), Some("pii".into()));
+        assert_eq!(
+            normalize_reported_agent_label("PII.EXE"),
+            Some("pii".into())
+        );
+        assert_eq!(
+            normalize_reported_agent_label("/custom/bin/pii"),
+            Some("pii".into())
+        );
+    }
 
     #[test]
     fn token_normalization_sanitizes_values_and_turns_empty_into_clear() {
