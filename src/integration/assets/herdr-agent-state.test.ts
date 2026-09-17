@@ -11,6 +11,7 @@ const originalEnvironment = {
   HERDR_OMP_IDLE_DEBOUNCE_MS: process.env.HERDR_OMP_IDLE_DEBOUNCE_MS,
   HERDR_PANE_ID: process.env.HERDR_PANE_ID,
   HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
+  PI_LAUNCHER: process.env.PI_LAUNCHER,
 };
 
 let server: Server | undefined;
@@ -238,6 +239,38 @@ test("OMP accepts POSIX and Windows session paths", async () => {
   );
   expect(isAbsoluteSessionPath("C:/Users/User/.omp/agent/sessions/omp-session.jsonl")).toBe(true);
   expect(isAbsoluteSessionPath("relative/omp-session.jsonl")).toBe(false);
+});
+
+test("Pi fork reports pii as its Herdr agent identifier", async () => {
+  const requests = await startRecordingServer("pii-identity");
+  process.env.PI_LAUNCHER = "pii";
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => true));
+  await waitFor(() => requestStates(requests).length === 1);
+
+  const report = requests.find(
+    (request) => isRecord(request) && request.method === "pane.report_agent",
+  );
+  expect(isRecord(report) && isRecord(report.params) ? report.params.agent : null).toBe("pii");
+});
+
+test("Vanilla Pi reports pi without the fork launcher marker", async () => {
+  const requests = await startRecordingServer("pi-vanilla-identity");
+  delete process.env.PI_LAUNCHER;
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => true));
+  await waitFor(() => requestStates(requests).length === 1);
+
+  const report = requests.find(
+    (request) => isRecord(request) && request.method === "pane.report_agent",
+  );
+  expect(isRecord(report) && isRecord(report.params) ? report.params.agent : null).toBe("pi");
 });
 
 test("Pi reports idle only after the agent settles", async () => {

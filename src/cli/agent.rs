@@ -346,7 +346,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
         eprintln!("unsupported interactive agent kind: {kind}");
         return Ok(2);
     };
-    let expected_kind = crate::detect::agent_label(expected_kind).to_string();
+    let expected_kind = crate::detect::agent_label_for_input(&kind, expected_kind).to_string();
     let agent_args = if separator < args.len() {
         args[separator + 1..].to_vec()
     } else {

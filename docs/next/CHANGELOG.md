@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- The shared Pi integration now preserves native session identity for both vanilla `pi` and the customized `pii` launcher, including launcher-specific resume commands.
 - Custom themes can now define separate light and dark color overrides when automatic theme switching is enabled. (#837, thanks @aneym)
 
 ### Fixed

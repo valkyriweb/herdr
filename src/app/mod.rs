@@ -2750,6 +2750,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pii_agent_start_uses_the_pii_launcher() {
+        let mut app = test_app();
+        let workspace = Workspace::test_new("agent-start-pii");
+        let root = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let pane_id = app.pane_info(0, root).unwrap().pane_id;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_manual_label("shell".into());
+        let (runtime, mut receiver) =
+            crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 1);
+        app.terminal_runtimes.insert(terminal_id, runtime);
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_agent_start_pii".into(),
+            method: crate::api::schema::Method::AgentStart(crate::api::schema::AgentStartParams {
+                name: "worker".into(),
+                kind: "pii".into(),
+                pane_id,
+                args: Vec::new(),
+                timeout_ms: Some(4_000),
+            }),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(response["result"]["type"], "agent_started");
+        let command = receiver.try_recv().unwrap();
+        assert!(String::from_utf8_lossy(&command).contains("pii"));
+    }
+
+    #[tokio::test]
     async fn failed_agent_start_input_rolls_back_and_can_retry() {
         let mut app = test_app();
         let workspace = Workspace::test_new("agent-start-input-failure");

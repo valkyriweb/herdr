@@ -457,10 +457,12 @@ fn agent_command() -> Command {
 }
 
 pub(super) fn agent_kind_values() -> Vec<&'static str> {
-    crate::detect::Agent::ALL
+    let mut values = crate::detect::Agent::ALL
         .into_iter()
         .map(crate::detect::agent_label)
-        .collect()
+        .collect::<Vec<_>>();
+    values.push("pii");
+    values
 }
 
 fn pane_command() -> Command {
@@ -1294,10 +1296,12 @@ mod tests {
         assert!(has_option(agent_start, "kind"));
         assert_eq!(
             option_values(agent_start, "kind"),
-            crate::detect::Agent::ALL
-                .map(crate::detect::agent_label)
-                .map(str::to_string)
+            super::agent_kind_values()
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
         );
+        assert!(option_values(agent_start, "kind").contains(&"pii".to_string()));
         assert!(has_option(agent_start, "pane"));
         for legacy in ["cwd", "workspace", "tab", "split", "focus", "env", "argv"] {
             assert!(!has_option(agent_start, legacy), "legacy option --{legacy}");
