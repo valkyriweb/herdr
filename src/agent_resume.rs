@@ -707,6 +707,14 @@ mod tests {
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_session_paths_accept_drive_and_unc_paths() {
+        assert!(AgentSessionRef::path(r"C:\Users\User\.pi\session.jsonl").is_some());
+        assert!(AgentSessionRef::path(r"\\server\share\.pi\session.jsonl").is_some());
+        assert!(AgentSessionRef::path(r"relative\session.jsonl").is_none());
+    }
+
     #[test]
     fn planner_rejects_path_refs_for_id_only_agents() {
         let hermes_session = absolute_test_path("hermes-session");
