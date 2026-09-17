@@ -60,9 +60,9 @@ pub fn session_ref_from_report(
         return None;
     }
 
-    // pi, omp, and prime-agent (pi-built) resume from a session file path, so
-    // prefer it and fall back to the id; every other agent resumes by id only.
-    if matches!(agent, "pi" | "omp" | "prime-agent") {
+    // pi, pii, omp, and prime-agent (pi-built) resume from a session file path,
+    // so prefer it and fall back to the id; every other agent resumes by id only.
+    if matches!(agent, "pi" | "pii" | "omp" | "prime-agent") {
         return agent_session_path
             .and_then(AgentSessionRef::path)
             .or_else(|| agent_session_id.and_then(AgentSessionRef::id));
@@ -106,7 +106,9 @@ pub fn session_ref_from_snapshot(
         return None;
     }
     let session_ref = match (agent, kind) {
-        ("pi" | "omp" | "prime-agent", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
+        ("pi" | "pii" | "omp" | "prime-agent", AgentSessionRefKind::Path) => {
+            AgentSessionRef::path(value)?
+        }
         (_, AgentSessionRefKind::Id) => AgentSessionRef::id(value)?,
         _ => return None,
     };
@@ -154,6 +156,9 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         }
         ("herdr:pi", "pi", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             vec!["pi".into(), "--session".into(), session_ref.value.clone()]
+        }
+        ("herdr:pi", "pii", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
+            vec!["pii".into(), "--session".into(), session_ref.value.clone()]
         }
         ("herdr:pi", "prime-agent", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             // prime-agent is pi-built and reports under the herdr:pi source with
@@ -252,6 +257,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:omp", "omp")
             | ("herdr:mastracode", "mastracode")
             | ("herdr:pi", "pi")
+            | ("herdr:pi", "pii")
             | ("herdr:pi", "prime-agent")
             | ("herdr:hermes", "hermes")
             | ("herdr:opencode", "opencode")
@@ -397,6 +403,16 @@ mod tests {
         assert_eq!(
             plan(
                 "herdr:pi",
+                "pii",
+                &AgentSessionRef::path(&pi_session).unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["pii", "--session", pi_session.as_str()]
+        );
+        assert_eq!(
+            plan(
+                "herdr:pi",
                 "prime-agent",
                 &AgentSessionRef::id("prime-session").unwrap()
             )
@@ -519,6 +535,12 @@ mod tests {
             &AgentSessionRef::path(&claude_session).unwrap()
         )
         .is_none());
+        assert!(plan(
+            "herdr:pi",
+            "pii",
+            &AgentSessionRef::path(&claude_session).unwrap()
+        )
+        .is_some());
     }
 
     #[test]
@@ -542,6 +564,30 @@ mod tests {
             session_ref_from_report("herdr:pi", "pi", None, Some("relative.jsonl".into()))
                 .is_none()
         );
+
+        let session_ref = session_ref_from_report(
+            "herdr:pi",
+            "pii",
+            Some("pii-id".into()),
+            Some(pi_session.clone()),
+        )
+        .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Path);
+        assert_eq!(session_ref.value, pi_session);
+        assert_eq!(
+            plan("herdr:pi", "pii", &session_ref).unwrap().argv,
+            vec!["pii", "--session", session_ref.value.as_str()]
+        );
+
+        let session_ref =
+            session_ref_from_report("herdr:pi", "pii", Some("pii-id".into()), None).unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "pii-id");
+        assert_eq!(
+            plan("herdr:pi", "pii", &session_ref).unwrap().argv,
+            vec!["pii", "--session", "pii-id"]
+        );
+        assert!(session_ref_from_report("herdr:pi", "pii", Some("bad\nid".into()), None).is_none());
         assert!(session_ref_from_report("custom:pi", "pi", Some("pi-id".into()), None).is_none());
 
         let session_ref = session_ref_from_report(
@@ -748,6 +794,14 @@ mod tests {
 
         let devin_plan = plan("herdr:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_session_paths_accept_drive_and_unc_paths() {
+        assert!(AgentSessionRef::path(r"C:\Users\User\.pi\session.jsonl").is_some());
+        assert!(AgentSessionRef::path(r"\\server\share\.pi\session.jsonl").is_some());
+        assert!(AgentSessionRef::path(r"relative\session.jsonl").is_none());
     }
 
     #[test]

@@ -346,7 +346,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
         eprintln!("unsupported interactive agent kind: {kind}");
         return Ok(2);
     };
-    let expected_kind = crate::detect::agent_label(expected_kind).to_string();
+    let expected_kind = crate::detect::agent_label_for_input(&kind, expected_kind).to_string();
     let agent_args = if separator < args.len() {
         args[separator + 1..].to_vec()
     } else {
@@ -596,11 +596,18 @@ fn wait_for_named_agent(
             .as_str()
             .filter(|actual| *actual != expected_kind)
         {
-            Some(Err(cli_agent_error(
-                "cli:agent:start",
-                "agent_kind_mismatch",
-                format!("expected {expected_kind}, detected {actual}"),
-            )))
+            // `pii` and vanilla `pi` share the same process argv0. Give the
+            // shared integration time to replace process detection's generic
+            // `pi` label with the launcher's reported `pii` identity.
+            if expected_kind == "pii" && actual == "pi" {
+                None
+            } else {
+                Some(Err(cli_agent_error(
+                    "cli:agent:start",
+                    "agent_kind_mismatch",
+                    format!("expected {expected_kind}, detected {actual}"),
+                )))
+            }
         } else if agent["name"].as_str() != Some(name) {
             Some(Err(agent_name_lost_error("cli:agent:start", name)))
         } else {

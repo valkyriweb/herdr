@@ -1328,7 +1328,7 @@ impl TerminalState {
             ) | ("herdr:mastracode", "mastracode", Some("startup"))
                 | ("herdr:hermes", "hermes", Some("startup" | "new" | "resume"))
                 | ("herdr:opencode", "opencode", Some("select"))
-                | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
+                | ("herdr:pi", "pi" | "pii", Some("new" | "resume" | "fork"))
                 | (
                     "herdr:omp",
                     "omp",
@@ -2407,6 +2407,7 @@ mod tests {
         for (agent, source, label) in [
             (Agent::Kimi, "herdr:kimi", "kimi"),
             (Agent::Kilo, "herdr:kilo", "kilo"),
+            (Agent::Pi, "herdr:pi", "pii"),
         ] {
             let mut terminal = test_terminal();
             terminal.set_detected_state(Some(agent), AgentState::Idle);

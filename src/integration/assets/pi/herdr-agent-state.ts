@@ -2,10 +2,11 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=8
+// HERDR_INTEGRATION_VERSION=11
 // @ts-nocheck
 
 import net from "node:net";
+import path from "node:path";
 
 const HERDR_ENV = process.env.HERDR_ENV;
 const socketPath = process.env.HERDR_SOCKET_PATH;
@@ -13,6 +14,9 @@ const socketEndpoint =
   process.platform === "win32" && socketPath ? `\\\\.\\pipe\\${socketPath}` : socketPath;
 const paneId = process.env.HERDR_PANE_ID;
 const source = "herdr:pi";
+// `pii` sets this integration-specific marker after sourcing user env; the
+// vanilla launcher clears it so an inherited fork marker cannot misidentify pi.
+const agent = process.env.HERDR_PI_VARIANT === "pii" ? "pii" : "pi";
 
 function enabled() {
   return HERDR_ENV === "1" && !!socketPath && !!paneId;
@@ -74,7 +78,10 @@ function updateSessionRef(ctx: any): void {
   try {
     const file = ctx?.sessionManager?.getSessionFile?.();
     currentAgentSessionPath =
-      typeof file === "string" && file.startsWith("/") ? file : undefined;
+      typeof file === "string" &&
+      (path.posix.isAbsolute(file) || path.win32.isAbsolute(file))
+        ? file
+        : undefined;
   } catch {
     currentAgentSessionPath = undefined;
   }
@@ -119,7 +126,7 @@ function reportSession(sessionStartSource?: string): Promise<void> {
     params: {
       pane_id: paneId,
       source,
-      agent: "pi",
+      agent,
       seq: nextReportSeq(),
       session_start_source: sessionStartSource,
       ...sessionRef,
@@ -134,7 +141,7 @@ function sendState(state: AgentState, message?: string, seq = nextReportSeq()): 
     params: withSessionRef({
       pane_id: paneId,
       source,
-      agent: "pi",
+      agent,
       state,
       message,
       seq,
@@ -143,10 +150,10 @@ function sendState(state: AgentState, message?: string, seq = nextReportSeq()): 
 }
 
 let sendInFlight = false;
-let queuedState: QueuedState | undefined;
+const queuedStates: QueuedState[] = [];
 
 function queueState(state: AgentState, message?: string): void {
-  queuedState = { state, message, seq: nextReportSeq() };
+  queuedStates.push({ state, message, seq: nextReportSeq() });
   if (!sendInFlight) {
     void drainStateQueue();
   }
@@ -159,14 +166,16 @@ async function drainStateQueue(): Promise<void> {
 
   sendInFlight = true;
   try {
-    while (queuedState) {
-      const next = queuedState;
-      queuedState = undefined;
+    while (true) {
+      const next = queuedStates.shift();
+      if (!next) {
+        break;
+      }
       await sendState(next.state, next.message, next.seq);
     }
   } finally {
     sendInFlight = false;
-    if (queuedState) {
+    if (queuedStates.length > 0) {
       void drainStateQueue();
     }
   }
