@@ -42,6 +42,7 @@ pub struct AgentDetection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
     Pi,
+    Prime,
     Claude,
     Codex,
     Gemini,
@@ -64,11 +65,13 @@ pub enum Agent {
     Qwen,
     Maki,
     Muse,
+    Rusty,
 }
 
 impl Agent {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 25] = [
         Self::Pi,
+        Self::Prime,
         Self::Claude,
         Self::Codex,
         Self::Gemini,
@@ -91,6 +94,7 @@ impl Agent {
         Self::Qwen,
         Self::Maki,
         Self::Muse,
+        Self::Rusty,
     ];
 
     pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
@@ -121,6 +125,7 @@ impl Agent {
 pub fn agent_label(agent: Agent) -> &'static str {
     match agent {
         Agent::Pi => "pi",
+        Agent::Prime => "prime-agent",
         Agent::Claude => "claude",
         Agent::Codex => "codex",
         Agent::Gemini => "gemini",
@@ -143,6 +148,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::Rusty => "rusty",
     }
 }
 
@@ -165,6 +171,7 @@ pub fn interactive_agent_executable_for_label(label: &str, agent: Agent) -> &'st
 pub fn interactive_agent_executable(agent: Agent) -> &'static str {
     match agent {
         Agent::Pi => "pi",
+        Agent::Prime => "prime-agent",
         Agent::Claude => "claude",
         Agent::Codex => "codex",
         Agent::Gemini => "gemini",
@@ -193,6 +200,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qwen => "qwen",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::Rusty => "rusty",
     }
 }
 
@@ -210,6 +218,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
     let name = path_basename(name);
     match name {
         "pi" | "pii" => Some(Agent::Pi),
+        "prime-agent" | "prime" => Some(Agent::Prime),
         "claude" | "claude-code" => Some(Agent::Claude),
         "codex" => Some(Agent::Codex),
         "gemini" => Some(Agent::Gemini),
@@ -232,6 +241,9 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
+        // Rusty's `rusty` launcher script leads the pane's foreground job for
+        // the whole session, so the wrapped script name identifies the agent.
+        "rusty" => Some(Agent::Rusty),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }
@@ -832,6 +844,9 @@ mod tests {
             identify_agent(r"C:\Users\user\muse-bin-0.2.1-R1215.1.exe"),
             Some(Agent::Muse)
         );
+        assert_eq!(identify_agent("prime-agent"), Some(Agent::Prime));
+        assert_eq!(identify_agent("rusty"), Some(Agent::Rusty));
+        assert_eq!(identify_agent("rustyd"), None);
     }
 
     #[test]
@@ -875,6 +890,7 @@ mod tests {
     fn every_agent_has_a_canonical_interactive_executable() {
         let expected = [
             (Agent::Pi, "pi"),
+            (Agent::Prime, "prime-agent"),
             (Agent::Claude, "claude"),
             (Agent::Codex, "codex"),
             (Agent::Gemini, "gemini"),
@@ -904,6 +920,7 @@ mod tests {
             (Agent::Qwen, "qwen"),
             (Agent::Maki, "maki"),
             (Agent::Muse, "muse"),
+            (Agent::Rusty, "rusty"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {
