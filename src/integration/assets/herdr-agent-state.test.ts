@@ -351,6 +351,101 @@ test("Pi settlement preserves explicit blocked-state precedence", async () => {
   expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "idle"]);
 });
 
+test("Pi maps ui_prompt open/answer to blocked then working", async () => {
+  const requests = await startRecordingServer("pi-ui-prompt-answer");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = true;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+
+  handlers.get("ui_prompt_start")?.({
+    reason: "ui_prompt",
+    kind: "custom",
+    title: "Ask ▸ Which PR? secret-body",
+  }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked"]);
+  expect(requestMessages(requests)).toEqual([undefined, undefined, "custom"]);
+
+  // Answer, Esc, abort, timeout, and error all close via ui_prompt_end.
+  handlers.get("ui_prompt_end")?.({ reason: "ui_prompt", kind: "custom" }, context);
+  await waitFor(() => requestStates(requests).length === 4);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "working"]);
+});
+
+test("Pi ui_prompt blocked state survives settlement until the prompt ends", async () => {
+  const requests = await startRecordingServer("pi-ui-prompt-settled");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = true;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+  handlers.get("ui_prompt_start")?.({ reason: "ui_prompt", kind: "confirm" }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+
+  idle = true;
+  handlers.get("agent_settled")?.({}, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked"]);
+
+  handlers.get("ui_prompt_end")?.({ reason: "ui_prompt", kind: "confirm" }, context);
+  await waitFor(() => requestStates(requests).length === 4);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "idle"]);
+});
+
+test("Pi extra ui_prompt_end does not leave a stale blocked state", async () => {
+  const requests = await startRecordingServer("pi-ui-prompt-stale");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = true;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+  idle = false;
+  handlers.get("agent_start")?.({}, context);
+  await waitFor(() => requestStates(requests).length === 2);
+
+  handlers.get("ui_prompt_start")?.({ reason: "ui_prompt", kind: "custom" }, context);
+  await waitFor(() => requestStates(requests).length === 3);
+  handlers.get("ui_prompt_end")?.({ reason: "ui_prompt", kind: "custom" }, context);
+  await waitFor(() => requestStates(requests).length === 4);
+  handlers.get("ui_prompt_end")?.({ reason: "ui_prompt", kind: "custom" }, context);
+  await Bun.sleep(25);
+  expect(requestStates(requests)).toEqual(["idle", "working", "blocked", "working"]);
+});
+
+test("Pi ignores ui_prompt events before a TUI session starts", async () => {
+  const requests = await startRecordingServer("pi-ui-prompt-rpc");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  const context = {
+    ...piContext(() => false),
+    mode: "rpc",
+  };
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  handlers.get("ui_prompt_start")?.({ reason: "ui_prompt", kind: "custom" }, context);
+  handlers.get("ui_prompt_end")?.({ reason: "ui_prompt", kind: "custom" }, context);
+  await Bun.sleep(25);
+  expect(requests).toEqual([]);
+});
+
 test("Pi preserves a blocked transition while a state report is in flight", async () => {
   const recordingSocketPath = join(tmpdir(), `herdr-pi-blocked-order-${process.pid}.sock`);
   socketPath = recordingSocketPath;
@@ -682,6 +777,12 @@ function requestStates(requests: unknown[]): unknown[] {
   return requests
     .filter((request) => isRecord(request) && request.method === "pane.report_agent")
     .map(requestState);
+}
+
+function requestMessages(requests: unknown[]): unknown[] {
+  return requests
+    .filter((request) => isRecord(request) && request.method === "pane.report_agent")
+    .map((request) => (isRecord(request) && isRecord(request.params) ? request.params.message : undefined));
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
