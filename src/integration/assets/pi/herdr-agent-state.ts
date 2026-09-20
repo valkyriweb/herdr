@@ -213,11 +213,11 @@ export default function (pi) {
     queueState(next.state, next.message);
   }
 
-  pi.events.on("herdr:blocked", (data) => {
+  function setBlocked(active: boolean, message?: string) {
     if (!rootSession) {
       return;
     }
-    if (!data?.active) {
+    if (!active) {
       blockedCount = Math.max(0, blockedCount - 1);
       if (blockedCount === 0) {
         blockedMessage = undefined;
@@ -227,8 +227,23 @@ export default function (pi) {
     }
 
     blockedCount += 1;
-    blockedMessage = data.label;
+    blockedMessage = message;
     publishState();
+  }
+
+  // Explicit waits that do not go through ctx.ui (legacy/custom emitters).
+  pi.events.on("herdr:blocked", (data) => {
+    setBlocked(Boolean(data?.active), data?.label);
+  });
+
+  // Generic Pi UI-prompt lifecycle. ctx.ui.custom/select/confirm/input/editor
+  // emit these, including AskUserQuestion. Forward kind only — never title/body.
+  pi.on("ui_prompt_start", (event) => {
+    setBlocked(true, typeof event?.kind === "string" ? event.kind : "custom");
+  });
+
+  pi.on("ui_prompt_end", () => {
+    setBlocked(false);
   });
 
   pi.on("session_start", async (event, ctx) => {
