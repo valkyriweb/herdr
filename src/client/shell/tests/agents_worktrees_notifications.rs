@@ -646,7 +646,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             .collect::<Vec<_>>(),
         vec!["pane_2", "pane_3"]
     );
-    assert_eq!(state.hits.agent_sort_toggle, Rect::default());
+    assert!(state.hits.agent_sort_toggle.width > 0);
 
     let mut focus = ClientShellInput::default();
     state.record_binding(
@@ -709,7 +709,18 @@ fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
     let mut state = ClientShellState::new(config);
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
-    state.compose(106, 30).expect("agent sidebar frame");
+    let frame = state.compose(106, 30).expect("agent sidebar frame");
+    let frame_text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(frame_text.contains("spaces"), "frame: {frame_text}");
     let toggle = state.hits.agent_sort_toggle;
 
     let click = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
@@ -724,6 +735,18 @@ fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
         crate::config::AgentPanelSortConfig::Priority
     );
     assert!(click.actions.is_empty());
+    let frame = state.compose(106, 30).expect("priority sidebar frame");
+    let frame_text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(frame_text.contains("priority"), "frame: {frame_text}");
     let reloaded_config =
         ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
     let reloaded = ClientShellState::new(reloaded_config);
@@ -733,6 +756,128 @@ fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
     );
     assert!(reloaded.agent_panel_sort_manual);
     std::fs::remove_file(path).expect("remove agent sort preferences");
+}
+
+#[test]
+fn priority_to_spaces_skips_unadvertised_restore_method() {
+    let path = std::env::temp_dir().join(format!(
+        "herdr-shell-agent-view-legacy-toggle-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    ));
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    let config = ClientShellConfig::from_config(&config).with_preferences_path(path.clone());
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_endpoint_methods(Some(vec!["agent.view.clear".into()]));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("priority sidebar frame");
+    let toggle = state.hits.agent_sort_toggle;
+
+    let click = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: toggle.x,
+        row: toggle.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+
+    assert_eq!(
+        state.config.agent_panel_sort,
+        crate::config::AgentPanelSortConfig::Spaces
+    );
+    assert!(click.actions.is_empty());
+    assert!(state.visible_endpoint_notice.is_none());
+    std::fs::remove_file(path).expect("remove agent view toggle preferences");
+}
+
+#[test]
+fn priority_and_plugin_view_clicks_restore_and_clear_views() {
+    let path = std::env::temp_dir().join(format!(
+        "herdr-shell-agent-view-toggle-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    ));
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    let config = ClientShellConfig::from_config(&config).with_preferences_path(path.clone());
+    let mut state = ClientShellState::new(config);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_endpoint_methods(Some(vec![
+        "agent.view.clear".into(),
+        "agent.view.restore".into(),
+    ]));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("priority sidebar frame");
+    let toggle = state.hits.agent_sort_toggle;
+    assert!(toggle.width > 0);
+
+    let restore =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: toggle.x,
+            row: toggle.y,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert_eq!(
+        state.config.agent_panel_sort,
+        crate::config::AgentPanelSortConfig::Spaces
+    );
+    assert!(matches!(
+        &restore.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::AgentViewRestore(_)
+            )
+    ));
+
+    let mut active_view = snapshot();
+    active_view.agent_view_label = Some("projects".into());
+    state.set_snapshot(Box::new(active_view));
+    let frame = state.compose(106, 30).expect("plugin view sidebar frame");
+    let frame_text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(frame_text.contains("projects"), "frame: {frame_text}");
+    let toggle = state.hits.agent_sort_toggle;
+    assert!(
+        toggle.width > 0,
+        "active plugin view label must remain clickable"
+    );
+
+    let clear = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: toggle.x,
+        row: toggle.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert_eq!(
+        state.config.agent_panel_sort,
+        crate::config::AgentPanelSortConfig::Spaces
+    );
+    assert!(matches!(
+        &clear.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::AgentViewClear(params) if params.source.is_none()
+            )
+    ));
+    std::fs::remove_file(path).expect("remove agent view toggle preferences");
 }
 
 #[test]

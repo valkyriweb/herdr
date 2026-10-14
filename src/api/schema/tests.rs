@@ -413,6 +413,15 @@ fn agent_view_requests_round_trip() {
     let request: Request = serde_json::from_value(clear_json.clone()).unwrap();
     assert!(matches!(request.method, Method::AgentViewClear(_)));
     assert_eq!(serde_json::to_value(request).unwrap(), clear_json);
+
+    let restore_json = serde_json::json!({
+        "id": "view-restore",
+        "method": "agent.view.restore",
+        "params": {}
+    });
+    let request: Request = serde_json::from_value(restore_json.clone()).unwrap();
+    assert!(matches!(request.method, Method::AgentViewRestore(_)));
+    assert_eq!(serde_json::to_value(request).unwrap(), restore_json);
 }
 
 #[test]

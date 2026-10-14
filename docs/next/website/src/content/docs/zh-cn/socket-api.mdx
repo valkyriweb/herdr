@@ -102,7 +102,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | 窗格 | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | 弹窗 | `popup.close` |
 | 布局 | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
-| 智能体 | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
+| 智能体 | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start`、`agent.view.set`、`agent.view.clear`、`agent.view.restore` |
 | 事件 | `events.subscribe`、`events.wait` |
 | 集成 | `integration.install`、`integration.uninstall` |
 | 插件 | `plugin.link`、`plugin.list`、`plugin.unlink`、`plugin.enable`、`plugin.disable`、`plugin.action.list`、`plugin.action.invoke`、`plugin.log.list`、`plugin.pane.open`、`plugin.pane.focus`、`plugin.pane.close` |
@@ -357,9 +357,11 @@ UI 上下文变化时,该投影会重新求值。它控制展开和折叠的侧�
 
 `source` 标识所有者。插件使用 `plugin:<HERDR_PLUGIN_ID>`;当所属插件不存在
 或被禁用时,Herdr 会拒绝设置。其他调用方可以使用自己的非 `plugin:` source。
-设置成功会原子替换之前的视图。该视图会持续到被 clear、被替换、所属插件被
-disable、unlink 或 uninstall,或者服务器退出。需要持久行为的插件应把查询保存到
-`HERDR_PLUGIN_STATE_DIR`,并从 `[[startup]]` 钩子重新应用。
+设置成功会原子替换活动视图。活动视图会在被清除或替换、所属插件被禁用或 unlink、或服务器
+退出时结束。`herdr plugin uninstall` 命令会 unlink 该插件。服务器会在内存中保存最近一个未过滤的
+插件视图。clear 不会删除这份已保存视图。带过滤器的插件视图不会替换它。所属插件被禁用或 unlink、
+新的未过滤插件视图替换它,或者服务器退出时,Herdr 会删除已保存视图。需要持久行为的
+插件应把查询保存到 `HERDR_PLUGIN_STATE_DIR`,并从 `[[startup]]` 钩子重新应用。
 
 可以无条件 clear,也可以只在指定 source 仍拥有视图时 clear:
 
@@ -368,8 +370,18 @@ disable、unlink 或 uninstall,或者服务器退出。需要持久行为的插�
 {"id":"view_clear_owned","method":"agent.view.clear","params":{"source":"plugin:example.agent-views"}}
 ```
 
-source 不匹配时,活动视图保持不变。set 和 clear 响应使用
-`type: "agent_view"`,并报告 `active`、`source` 和可选的 `label`。
+source 不匹配时,活动视图保持不变。`agent.view.restore` 接受空 params。有符合条件的已保存视图时,
+restore 会激活它并替换当前活动视图。没有符合条件的已保存视图时,活动视图保持不变;如果所属插件
+不存在或已禁用,Herdr 会丢弃该已保存视图。
+
+set、clear 和 restore 响应使用 `type: "agent_view"`,并报告 `active`、`source` 和可选的
+`label`。
+
+重新应用已保存的插件视图:
+
+```json
+{"id":"view_restore","method":"agent.view.restore","params":{}}
+```
 
 ## 插件 API
 

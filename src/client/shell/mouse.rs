@@ -1934,15 +1934,40 @@ impl ClientShellState {
                     return;
                 }
                 if super::contains(self.hits.agent_sort_toggle, point) {
-                    let sort = match self.config.agent_panel_sort {
-                        crate::config::AgentPanelSortConfig::Spaces => {
-                            crate::config::AgentPanelSortConfig::Priority
+                    let view_active = self
+                        .snapshot
+                        .as_deref()
+                        .is_some_and(|snapshot| snapshot.agent_view_label.is_some());
+                    if view_active {
+                        let method = crate::api::schema::Method::AgentViewClear(
+                            crate::api::schema::AgentViewClearParams::default(),
+                        );
+                        if !self.push_endpoint_method_with_kind(
+                            method,
+                            super::PendingEndpointKind::Generic,
+                            outcome,
+                        ) {
+                            return;
                         }
-                        crate::config::AgentPanelSortConfig::Priority => {
-                            crate::config::AgentPanelSortConfig::Spaces
+                        self.config.agent_panel_sort = crate::config::AgentPanelSortConfig::Spaces;
+                    } else {
+                        match self.config.agent_panel_sort {
+                            crate::config::AgentPanelSortConfig::Spaces => {
+                                self.config.agent_panel_sort =
+                                    crate::config::AgentPanelSortConfig::Priority;
+                            }
+                            crate::config::AgentPanelSortConfig::Priority => {
+                                self.config.agent_panel_sort =
+                                    crate::config::AgentPanelSortConfig::Spaces;
+                                let method = crate::api::schema::Method::AgentViewRestore(
+                                    crate::api::schema::EmptyParams {},
+                                );
+                                if self.supports_endpoint_method(&method) {
+                                    self.push_endpoint_method(method, outcome);
+                                }
+                            }
                         }
-                    };
-                    self.config.agent_panel_sort = sort;
+                    }
                     self.agent_panel_sort_manual = true;
                     self.agent_scroll = 0;
                     self.persist_chrome_preferences(outcome);
