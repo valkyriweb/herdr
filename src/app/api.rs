@@ -944,6 +944,7 @@ impl App {
             Method::AgentViewClear(params) => {
                 return self.handle_agent_view_clear(request.id, params)
             }
+            Method::AgentViewRestore(_) => return self.handle_agent_view_restore(request.id),
             Method::AgentStart(params) => return self.handle_agent_start(request.id, params),
             Method::AgentPrompt(_) => {
                 return responses::encode_error(

@@ -13,6 +13,8 @@ pub(crate) const MAX_ENDPOINT_REQUEST_ID_BYTES: usize = 128;
 const ENDPOINT_RESPONSE_CHUNK_BYTES: usize = 512 * 1024;
 
 const CLIENT_SHELL_METHODS: &[&str] = &[
+    "agent.view.clear",
+    "agent.view.restore",
     "command.invoke",
     "integration.install",
     "integration.list",

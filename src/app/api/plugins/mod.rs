@@ -1369,12 +1369,14 @@ platforms = ["linux", "macos"]
         let root = unique_temp_path("plugin-enable-disable");
         write_manifest(&root);
         link_manifest(&mut app, &root);
-        app.state.agent_view_override = Some(crate::api::schema::AgentViewSetParams {
+        let plugin_view = crate::api::schema::AgentViewSetParams {
             source: "plugin:example.worktree-bootstrap".into(),
             label: None,
             filter: None,
             sort: Vec::new(),
-        });
+        };
+        app.state.agent_view_override = Some(plugin_view.clone());
+        app.state.last_plugin_agent_view = Some(plugin_view);
 
         let disabled = app.handle_api_request(Request {
             id: "disable".into(),
@@ -1387,6 +1389,7 @@ platforms = ["linux", "macos"]
         };
         assert!(!plugin.enabled);
         assert!(app.state.agent_view_override.is_none());
+        assert!(app.state.last_plugin_agent_view.is_none());
         let delayed_restore = app.handle_api_request(Request {
             id: "delayed-startup-restore".into(),
             method: Method::AgentViewSet(crate::api::schema::AgentViewSetParams {

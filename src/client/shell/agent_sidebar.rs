@@ -86,7 +86,7 @@ pub(super) fn render_agent_panel(
             .agent_view_label
             .as_deref()
             .unwrap_or(match config.agent_panel_sort {
-                crate::config::AgentPanelSortConfig::Spaces => "grouped",
+                crate::config::AgentPanelSortConfig::Spaces => "spaces",
                 crate::config::AgentPanelSortConfig::Priority => "priority",
             });
     let sort_width = display_width(sort_label).min(area.width as usize) as u16;
@@ -96,7 +96,7 @@ pub(super) fn render_agent_panel(
         sort_width,
         1,
     );
-    hits.agent_sort_toggle = if config.mouse_capture && snapshot.agent_view_label.is_none() {
+    hits.agent_sort_toggle = if config.mouse_capture {
         sort_rect
     } else {
         Rect::default()

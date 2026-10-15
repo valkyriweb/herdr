@@ -5394,6 +5394,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.view.restore",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.focus",
               "type": "string"
             },

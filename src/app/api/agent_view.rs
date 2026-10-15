@@ -27,6 +27,9 @@ impl App {
                 return encode_error(id, "plugin_disabled", "plugin is disabled");
             }
         }
+        if params.source.starts_with("plugin:") && params.filter.is_none() {
+            self.state.last_plugin_agent_view = Some(params.clone());
+        }
         let source = params.source.clone();
         let label = params.label.clone();
         self.replace_agent_view_override(Some(params));
@@ -36,6 +39,40 @@ impl App {
                 active: true,
                 source: Some(source),
                 label,
+            },
+        )
+    }
+
+    pub(super) fn handle_agent_view_restore(&mut self, id: String) -> String {
+        if let Some(view) = self.state.last_plugin_agent_view.clone() {
+            let plugin_enabled = view
+                .source
+                .strip_prefix("plugin:")
+                .and_then(super::plugins::normalize_plugin_id)
+                .and_then(|plugin_id| self.state.installed_plugins.get(&plugin_id))
+                .is_some_and(|plugin| plugin.enabled);
+            if view.filter.is_none() && plugin_enabled {
+                let source = view.source.clone();
+                let label = view.label.clone();
+                self.replace_agent_view_override(Some(view));
+                return encode_success(
+                    id,
+                    ResponseResult::AgentView {
+                        active: true,
+                        source: Some(source),
+                        label,
+                    },
+                );
+            }
+            self.state.last_plugin_agent_view = None;
+        }
+        let active = self.state.agent_view_override.as_ref();
+        encode_success(
+            id,
+            ResponseResult::AgentView {
+                active: active.is_some(),
+                source: active.map(|view| view.source.clone()),
+                label: active.and_then(|view| view.label.clone()),
             },
         )
     }
@@ -72,17 +109,23 @@ impl App {
     }
 
     pub(crate) fn clear_agent_view_for_source(&mut self, source: &str) -> bool {
-        if self
+        let active_cleared = self
             .state
             .agent_view_override
             .as_ref()
-            .is_some_and(|active| active.source == source)
-        {
+            .is_some_and(|active| active.source == source);
+        if active_cleared {
             self.replace_agent_view_override(None);
-            true
-        } else {
-            false
         }
+        let remembered_cleared = self
+            .state
+            .last_plugin_agent_view
+            .as_ref()
+            .is_some_and(|view| view.source == source);
+        if remembered_cleared {
+            self.state.last_plugin_agent_view = None;
+        }
+        active_cleared || remembered_cleared
     }
 
     fn replace_agent_view_override(&mut self, view: Option<AgentViewSetParams>) {
@@ -116,6 +159,41 @@ mod tests {
                 field: AgentViewField::Builtin(AgentViewBuiltinField::Status),
                 value: AgentViewValue::String("working".to_string()),
             }),
+            sort: Vec::new(),
+        }
+    }
+
+    fn install_test_plugin(app: &mut App, enabled: bool) {
+        let plugin_id = "example.worktree-bootstrap".to_string();
+        app.state.installed_plugins.insert(
+            plugin_id.clone(),
+            crate::api::schema::InstalledPluginInfo {
+                plugin_id,
+                name: "Example".to_string(),
+                version: "1.0.0".to_string(),
+                min_herdr_version: String::new(),
+                description: None,
+                manifest_path: String::new(),
+                plugin_root: String::new(),
+                enabled,
+                platforms: None,
+                build: Vec::new(),
+                startup: Vec::new(),
+                actions: Vec::new(),
+                events: Vec::new(),
+                panes: Vec::new(),
+                link_handlers: Vec::new(),
+                source: Default::default(),
+                warnings: Vec::new(),
+            },
+        );
+    }
+
+    fn projects_view(filter: Option<AgentViewFilter>) -> AgentViewSetParams {
+        AgentViewSetParams {
+            source: "plugin:example.worktree-bootstrap".to_string(),
+            label: Some("projects".to_string()),
+            filter,
             sort: Vec::new(),
         }
     }
@@ -157,6 +235,189 @@ mod tests {
             },
         );
         assert!(app.state.agent_view_override.is_none());
+    }
+
+    #[test]
+    fn unfiltered_plugin_view_survives_clear_and_can_be_restored() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        let expected = projects_view(None);
+
+        app.handle_agent_view_set("set".to_string(), expected.clone());
+        assert_eq!(app.state.last_plugin_agent_view, Some(expected.clone()));
+
+        app.handle_agent_view_clear("clear".to_string(), AgentViewClearParams::default());
+        assert!(app.state.agent_view_override.is_none());
+        assert_eq!(app.state.last_plugin_agent_view, Some(expected.clone()));
+
+        let response = app.handle_agent_view_restore("restore".to_string());
+        let response: crate::api::schema::SuccessResponse =
+            serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            response.result,
+            ResponseResult::AgentView {
+                active: true,
+                source: Some(expected.source.clone()),
+                label: expected.label.clone(),
+            }
+        );
+        assert_eq!(app.state.agent_view_override, Some(expected));
+    }
+
+    #[test]
+    fn filtered_plugin_view_does_not_replace_remembered_unfiltered_view() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        let expected = projects_view(None);
+        app.handle_agent_view_set("set-unfiltered".to_string(), expected.clone());
+
+        app.handle_agent_view_set(
+            "set-filtered".to_string(),
+            working_view("plugin:example.worktree-bootstrap"),
+        );
+        assert_eq!(app.state.last_plugin_agent_view, Some(expected.clone()));
+
+        app.handle_agent_view_clear("clear".to_string(), AgentViewClearParams::default());
+        app.handle_agent_view_restore("restore".to_string());
+        assert_eq!(app.state.agent_view_override, Some(expected));
+    }
+
+    #[test]
+    fn restore_discards_view_when_its_plugin_is_disabled() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        let expected = projects_view(None);
+        app.handle_agent_view_set("set".to_string(), expected);
+        app.handle_agent_view_clear("clear".to_string(), AgentViewClearParams::default());
+        app.state
+            .installed_plugins
+            .get_mut("example.worktree-bootstrap")
+            .expect("test plugin")
+            .enabled = false;
+
+        let response = app.handle_agent_view_restore("restore".to_string());
+        let response: crate::api::schema::SuccessResponse =
+            serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            response.result,
+            ResponseResult::AgentView {
+                active: false,
+                source: None,
+                label: None,
+            }
+        );
+        assert!(app.state.last_plugin_agent_view.is_none());
+        assert!(app.state.agent_view_override.is_none());
+    }
+
+    fn restore_result(app: &mut App) -> ResponseResult {
+        let response = app.handle_agent_view_restore("restore".to_string());
+        let response: crate::api::schema::SuccessResponse =
+            serde_json::from_str(&response).unwrap();
+        response.result
+    }
+
+    fn active_result(source: &str, label: &str) -> ResponseResult {
+        ResponseResult::AgentView {
+            active: true,
+            source: Some(source.to_string()),
+            label: Some(label.to_string()),
+        }
+    }
+
+    #[test]
+    fn restore_replaces_already_active_view() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        let saved = projects_view(None);
+        app.handle_agent_view_set("set-saved".to_string(), saved.clone());
+        app.handle_agent_view_set("set-active".to_string(), working_view("example.views"));
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .map(|view| view.source.as_str()),
+            Some("example.views")
+        );
+
+        assert_eq!(
+            restore_result(&mut app),
+            active_result(&saved.source, "projects")
+        );
+        assert_eq!(app.state.agent_view_override, Some(saved.clone()));
+        assert_eq!(app.state.last_plugin_agent_view, Some(saved));
+    }
+
+    #[test]
+    fn restore_preserves_active_view_and_discards_saved_view_when_plugin_is_disabled() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        app.handle_agent_view_set("set-saved".to_string(), projects_view(None));
+        app.handle_agent_view_set("set-active".to_string(), working_view("example.views"));
+        app.state
+            .installed_plugins
+            .get_mut("example.worktree-bootstrap")
+            .expect("test plugin")
+            .enabled = false;
+
+        assert_eq!(
+            restore_result(&mut app),
+            active_result("example.views", "working")
+        );
+        assert!(app.state.last_plugin_agent_view.is_none());
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .map(|view| view.source.as_str()),
+            Some("example.views")
+        );
+    }
+
+    #[test]
+    fn restore_preserves_active_view_and_discards_saved_view_when_plugin_is_absent() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        app.handle_agent_view_set("set-saved".to_string(), projects_view(None));
+        app.handle_agent_view_set("set-active".to_string(), working_view("example.views"));
+        app.state
+            .installed_plugins
+            .remove("example.worktree-bootstrap");
+
+        assert_eq!(
+            restore_result(&mut app),
+            active_result("example.views", "working")
+        );
+        assert!(app.state.last_plugin_agent_view.is_none());
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .map(|view| view.source.as_str()),
+            Some("example.views")
+        );
+    }
+
+    #[test]
+    fn restore_preserves_active_view_and_discards_invalid_filtered_saved_view() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        app.handle_agent_view_set("set-active".to_string(), working_view("example.views"));
+        // Normal set never stores a filtered plugin view; inject one directly.
+        app.state.last_plugin_agent_view = Some(working_view("plugin:example.worktree-bootstrap"));
+
+        assert_eq!(
+            restore_result(&mut app),
+            active_result("example.views", "working")
+        );
+        assert!(app.state.last_plugin_agent_view.is_none());
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .map(|view| view.source.as_str()),
+            Some("example.views")
+        );
     }
 
     #[test]

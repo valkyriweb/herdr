@@ -102,7 +102,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | ペイン | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | ポップアップ | `popup.close` |
 | レイアウト | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
-| エージェント | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
+| エージェント | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start`、`agent.view.set`、`agent.view.clear`、`agent.view.restore` |
 | イベント | `events.subscribe`、`events.wait` |
 | インテグレーション | `integration.install`、`integration.uninstall` |
 | プラグイン | `plugin.link`、`plugin.list`、`plugin.unlink`、`plugin.enable`、`plugin.disable`、`plugin.action.list`、`plugin.action.invoke`、`plugin.log.list`、`plugin.pane.open`、`plugin.pane.focus`、`plugin.pane.close` |
@@ -360,10 +360,14 @@ worktree コマンドはライフサイクルイベントも発行します。`w
 
 `source` は所有者を識別します。プラグインは `plugin:<HERDR_PLUGIN_ID>` を使います。
 所有元のプラグインが存在しないか無効な場合、Herdr は設定を拒否します。他の呼び出し元は
-独自の非 `plugin:` source を使えます。設定に成功すると以前のビューはアトミックに
-置き換えられます。ビューは clear または置換されるか、所有プラグインが disable、unlink、
-uninstall されるか、サーバーが終了するまで有効です。永続的な動作が必要なプラグインは、
-クエリを `HERDR_PLUGIN_STATE_DIR` に保存し、`[[startup]]` フックから再適用してください。
+独自の非 `plugin:` source を使えます。設定に成功するとアクティブなビューはアトミックに
+置き換えられます。アクティブなビューは clear または置き換え、所有プラグインの disable または
+unlink、またはサーバー終了で終了します。`herdr plugin uninstall` コマンドは
+このプラグインを unlink します。サーバーは最新のフィルターなしのプラグイン所有ビューをメモリーに
+保持します。clear してもこの保存済みビューは削除されません。フィルター付きビューはこれを置き換えません。所有プラグインが
+disable または unlink されたとき、別のフィルターなしプラグインビューに置き換わったとき、
+またはサーバーが終了したときに、保存済みビューは削除されます。永続的な動作が必要な
+プラグインは、クエリを `HERDR_PLUGIN_STATE_DIR` に保存し、`[[startup]]` フックから再適用してください。
 
 無条件で clear するか、指定した source がまだ所有している場合だけ clear できます:
 
@@ -372,8 +376,19 @@ uninstall されるか、サーバーが終了するまで有効です。永続�
 {"id":"view_clear_owned","method":"agent.view.clear","params":{"source":"plugin:example.agent-views"}}
 ```
 
-source が一致しない場合、アクティブなビューは変わりません。set と clear のレスポンスは
-`type: "agent_view"` で、`active`、`source`、任意の `label` を報告します。
+source が一致しない場合、アクティブなビューは変わりません。`agent.view.restore` は空の
+params を受け取ります。利用可能な保存済みビューがある場合、それをアクティブにして現在の
+ビューを置き換えます。利用可能な保存済みビューがない場合、アクティブなビューは変わりません。
+プラグインが存在しないか無効な場合、Herdr はその保存済みビューを破棄します。
+
+set、clear、restore のレスポンスは `type: "agent_view"` で、`active`、`source`、任意の
+`label` を報告します。
+
+保存済みのプラグインビューを再適用します:
+
+```json
+{"id":"view_restore","method":"agent.view.restore","params":{}}
+```
 
 ## プラグイン API
 
