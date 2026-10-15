@@ -3016,8 +3016,10 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
         assert_eq!(response["result"]["type"], "agent_started");
+        assert_eq!(response["result"]["argv"], serde_json::json!(["pii"]));
+        // Windows encodes its PowerShell command, so only assert that submission was sent.
         let command = receiver.try_recv().unwrap();
-        assert!(String::from_utf8_lossy(&command).contains("pii"));
+        assert!(!command.is_empty());
     }
 
     #[tokio::test]
