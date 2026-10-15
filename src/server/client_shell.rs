@@ -243,6 +243,24 @@ pub(super) fn snapshot(
     }
 }
 
+/// Grouping metadata for the active agent view. Only views that name a group token carry a
+/// source and token; every other state projects the same flat marker.
+pub(super) fn agent_view_projection(
+    app: &app::App,
+    boot_id: &str,
+) -> protocol::endpoint::EndpointAgentView {
+    let grouped = app
+        .state
+        .agent_view_override
+        .as_ref()
+        .and_then(|view| Some((view, view.group_by.as_ref()?)));
+    protocol::endpoint::EndpointAgentView {
+        boot_id: boot_id.to_owned(),
+        source: grouped.map(|(view, _)| view.source.clone()),
+        group_by_token: grouped.map(|(_, group_by)| group_by.token.clone()),
+    }
+}
+
 pub(super) struct RenderedPaneSurface {
     pub(super) frame: FrameData,
     pub(super) panes: Vec<protocol::PaneSurfacePane>,

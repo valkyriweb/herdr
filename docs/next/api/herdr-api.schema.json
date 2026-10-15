@@ -1565,6 +1565,17 @@
             }
           ]
         },
+        "AgentViewGroupBy": {
+          "properties": {
+            "token": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "token"
+          ],
+          "type": "object"
+        },
         "AgentViewSetParams": {
           "properties": {
             "filter": {
@@ -1576,6 +1587,17 @@
                   "type": "null"
                 }
               ]
+            },
+            "group_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/AgentViewGroupBy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional grouping. When set, clients draw one foldable heading per distinct value of the\ntoken. Agents without the token, or with an empty value, form a final `Other` group. Omitted\nmeans a flat list."
             },
             "label": {
               "type": [
@@ -10490,6 +10512,11 @@
         },
         "ServerCapabilities": {
           "properties": {
+            "agent_view_group_by": {
+              "default": false,
+              "description": "Whether `agent.view.set` honors the optional `group_by` token. Servers that predate\ngrouping omit this field and silently ignore `group_by`, so absent means false.",
+              "type": "boolean"
+            },
             "detached_server_daemon": {
               "default": false,
               "type": "boolean"

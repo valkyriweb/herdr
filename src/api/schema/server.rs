@@ -21,4 +21,8 @@ pub struct ServerCapabilities {
     /// Stable client-owned endpoint generation supported by this server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_protocol_generation: Option<u32>,
+    /// Whether `agent.view.set` honors the optional `group_by` token. Servers that predate
+    /// grouping omit this field and silently ignore `group_by`, so absent means false.
+    #[serde(default)]
+    pub agent_view_group_by: bool,
 }

@@ -144,6 +144,7 @@ pub(super) struct ShellHitMap {
     pub(super) agent_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) agent_max_scroll: usize,
     pub(super) agent_sort_toggle: Rect,
+    pub(super) agent_group_headings: Vec<(Rect, super::agent_sidebar::AgentGroupKey)>,
     pub(super) sidebar_divider: Rect,
     pub(super) sidebar_section_divider: Rect,
     pub(super) sidebar_toggle: Rect,
@@ -878,6 +879,10 @@ pub(crate) struct ClientShellState {
     pub(super) collapsed_groups: HashSet<String>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
+    /// Grouping announced by the endpoint for the active agent view, session-local.
+    pub(super) agent_view: Option<crate::protocol::endpoint::EndpointAgentView>,
+    /// Folded agent groups per (view source, group token), session-local and per endpoint boot.
+    pub(super) agent_group_folds: super::agent_sidebar::AgentGroupFolds,
     pub(super) tab_scroll: usize,
     pub(super) mobile_switcher_scroll: usize,
     pub(super) reveal_mobile_workspace: bool,
@@ -1019,6 +1024,8 @@ impl ClientShellState {
             collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
             workspace_scroll: 0,
             agent_scroll: 0,
+            agent_view: None,
+            agent_group_folds: HashMap::new(),
             tab_scroll: 0,
             mobile_switcher_scroll: 0,
             reveal_mobile_workspace: false,
@@ -1232,6 +1239,16 @@ impl ClientShellState {
             self.hits = ShellHitMap::default();
         }
         if boot_changed {
+            // Fold state belongs to one endpoint boot. Grouping metadata may already describe the
+            // new boot (it is sent before its snapshot), so only a mismatching one is stale.
+            self.agent_group_folds.clear();
+            if self
+                .agent_view
+                .as_ref()
+                .is_some_and(|view| view.boot_id != snapshot.boot_id)
+            {
+                self.agent_view = None;
+            }
             self.pane_surface = None;
             self.input_leases = ClientInputLeases::default();
             self.popup_terminal_id = None;

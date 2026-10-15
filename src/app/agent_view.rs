@@ -43,6 +43,9 @@ pub(crate) fn validate_agent_view(spec: &mut AgentViewSetParams) -> Result<(), S
     for sort in &spec.sort {
         validate_sort_field(&sort.field)?;
     }
+    if let Some(group_by) = &spec.group_by {
+        validate_token(&group_by.token)?;
+    }
     Ok(())
 }
 
@@ -51,16 +54,24 @@ pub(crate) fn validate_agent_view_source(source: &str) -> Result<String, String>
 }
 
 pub(crate) fn apply_agent_view(app: &AppState, entries: &mut Vec<AgentPanelEntry>) {
-    if let Some(spec) = app.agent_view_override.as_ref() {
-        if let Some(filter) = &spec.filter {
-            entries.retain(|entry| matches_filter(app, entry, filter));
-        }
-        if !spec.sort.is_empty() {
-            entries.sort_by(|left, right| compare_entries(app, left, right, &spec.sort));
-            return;
-        }
+    let Some(spec) = app.agent_view_override.as_ref() else {
+        apply_panel_sort(app, entries);
+        return;
+    };
+    if let Some(filter) = &spec.filter {
+        entries.retain(|entry| matches_filter(app, entry, filter));
     }
+    if spec.sort.is_empty() {
+        apply_panel_sort(app, entries);
+    } else {
+        entries.sort_by(|left, right| compare_entries(app, left, right, &spec.sort));
+    }
+    if let Some(group_by) = &spec.group_by {
+        group_entries_by_token(entries, &group_by.token);
+    }
+}
 
+fn apply_panel_sort(app: &AppState, entries: &mut [AgentPanelEntry]) {
     if matches!(
         app.agent_panel_sort,
         crate::app::state::AgentPanelSort::Priority
@@ -75,6 +86,35 @@ pub(crate) fn apply_agent_view(app: &AppState, entries: &mut Vec<AgentPanelEntry
             )
         });
     }
+}
+
+/// Makes each group contiguous. Groups appear in the order their first member appears in the
+/// already sorted entries, members keep their relative order, and entries without the token
+/// (missing or empty) form the final group. The client draws the headings from the same token.
+fn group_entries_by_token(entries: &mut [AgentPanelEntry], token: &str) {
+    let mut group_ranks: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for entry in entries.iter() {
+        if let Some(value) = group_value(entry, token) {
+            let next = group_ranks.len();
+            group_ranks.entry(value.to_owned()).or_insert(next);
+        }
+    }
+    let missing_rank = group_ranks.len();
+    // `sort_by_cached_key` is stable, so members keep their relative order.
+    entries.sort_by_cached_key(|entry| {
+        group_value(entry, token)
+            .and_then(|value| group_ranks.get(value).copied())
+            .unwrap_or(missing_rank)
+    });
+}
+
+fn group_value<'a>(entry: &'a AgentPanelEntry, token: &str) -> Option<&'a str> {
+    entry
+        .tokens
+        .get(token)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
 }
 
 pub(crate) fn presented_workspace_idx(app: &AppState) -> Option<usize> {
@@ -460,6 +500,7 @@ mod tests {
                 },
             }),
             sort: Vec::new(),
+            group_by: None,
         }
     }
 
@@ -510,6 +551,7 @@ mod tests {
                 field: AgentViewSortField::Builtin(AgentViewBuiltinSortField::WorkspaceOrder),
                 order: AgentViewSortOrder::Desc,
             }],
+            group_by: None,
         });
 
         let entries = projected_entries(&state);
@@ -544,6 +586,7 @@ mod tests {
                 value: AgentViewValue::String("custom-agent".to_string()),
             }),
             sort: Vec::new(),
+            group_by: None,
         });
 
         let entries = projected_entries(&state);
@@ -563,10 +606,154 @@ mod tests {
                 },
             }),
             sort: Vec::new(),
+            group_by: None,
         };
 
         assert!(validate_agent_view(&mut spec)
             .unwrap_err()
             .contains("context type"));
+    }
+
+    fn state_with_grouped_agents(tokens: &[Option<&str>]) -> AppState {
+        let mut state = AppState::test_new();
+        state.workspaces = (0..tokens.len())
+            .map(|index| Workspace::test_new(&format!("ws{index}")))
+            .collect();
+        state.ensure_test_terminals();
+        state.active = Some(0);
+        for (ws_idx, token) in tokens.iter().enumerate() {
+            let pane_id = state.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = state.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(Agent::Claude);
+            terminal.state = AgentState::Working;
+            if let Some(token) = token {
+                terminal.metadata_tokens.patch(
+                    [("project".to_string(), Some((*token).to_string()))].into(),
+                    None,
+                    std::time::Instant::now(),
+                );
+            }
+        }
+        state
+    }
+
+    fn grouped_view(sort: Vec<AgentViewSort>) -> AgentViewSetParams {
+        AgentViewSetParams {
+            source: "example.views".to_string(),
+            label: Some("projects".to_string()),
+            filter: None,
+            sort,
+            group_by: Some(crate::api::schema::AgentViewGroupBy {
+                token: "project".to_string(),
+            }),
+        }
+    }
+
+    fn workspace_order(state: &AppState) -> Vec<usize> {
+        projected_entries(state)
+            .iter()
+            .map(|entry| entry.ws_idx)
+            .collect()
+    }
+
+    #[test]
+    fn group_by_makes_groups_contiguous_by_first_appearance_with_missing_token_last() {
+        let mut state = state_with_grouped_agents(&[
+            Some("beta"),
+            None,
+            Some("alpha"),
+            Some("beta"),
+            Some(""),
+            Some("alpha"),
+        ]);
+        state.agent_view_override = Some(grouped_view(Vec::new()));
+
+        // Groups follow first appearance (beta, alpha); members keep their order; missing and
+        // empty tokens share the final group.
+        assert_eq!(workspace_order(&state), vec![0, 3, 2, 5, 1, 4]);
+    }
+
+    #[test]
+    fn group_by_follows_the_view_sort_for_group_order() {
+        let mut state = state_with_grouped_agents(&[
+            Some("beta"),
+            None,
+            Some("alpha"),
+            Some("beta"),
+            Some("alpha"),
+        ]);
+        state.agent_view_override = Some(grouped_view(vec![AgentViewSort {
+            field: AgentViewSortField::Token {
+                token: "project".to_string(),
+            },
+            order: AgentViewSortOrder::Asc,
+        }]));
+        assert_eq!(workspace_order(&state), vec![2, 4, 0, 3, 1]);
+
+        state.agent_view_override = Some(grouped_view(vec![AgentViewSort {
+            field: AgentViewSortField::Token {
+                token: "project".to_string(),
+            },
+            order: AgentViewSortOrder::Desc,
+        }]));
+        // Missing tokens stay last even for a descending sort.
+        assert_eq!(workspace_order(&state), vec![0, 3, 2, 4, 1]);
+    }
+
+    #[test]
+    fn group_by_applies_after_the_filter_and_without_group_by_order_is_unchanged() {
+        let mut state = state_with_grouped_agents(&[Some("b"), Some("a"), Some("b"), None]);
+        let pane_id = state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        state.terminals.get_mut(&terminal_id).unwrap().state = AgentState::Idle;
+
+        let mut view = grouped_view(Vec::new());
+        view.filter = Some(AgentViewFilter::Eq {
+            field: AgentViewField::Builtin(AgentViewBuiltinField::Status),
+            value: AgentViewValue::String("working".to_string()),
+        });
+        state.agent_view_override = Some(view.clone());
+        assert_eq!(workspace_order(&state), vec![1, 2, 3]);
+
+        view.group_by = None;
+        view.filter = None;
+        state.agent_view_override = Some(view);
+        assert_eq!(workspace_order(&state), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn group_by_keeps_the_default_priority_order_inside_groups() {
+        let mut state = state_with_grouped_agents(&[Some("a"), Some("b"), Some("a")]);
+        state.agent_panel_sort = crate::app::state::AgentPanelSort::Priority;
+        let pane_id = state.workspaces[2].tabs[0].root_pane;
+        let terminal_id = state.workspaces[2].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        state.terminals.get_mut(&terminal_id).unwrap().state = AgentState::Blocked;
+        state.agent_view_override = Some(grouped_view(Vec::new()));
+
+        // Priority puts the blocked pane (ws2) first, so its group leads and it leads its group.
+        assert_eq!(workspace_order(&state), vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn group_by_validation_accepts_tokens_and_rejects_invalid_names() {
+        let mut spec = grouped_view(Vec::new());
+        assert!(validate_agent_view(&mut spec).is_ok());
+        spec.group_by = Some(crate::api::schema::AgentViewGroupBy {
+            token: "has space".to_string(),
+        });
+        assert!(validate_agent_view(&mut spec)
+            .unwrap_err()
+            .contains("invalid agent view token"));
+        spec.group_by = Some(crate::api::schema::AgentViewGroupBy {
+            token: String::new(),
+        });
+        assert!(validate_agent_view(&mut spec).is_err());
     }
 }

@@ -1374,6 +1374,7 @@ platforms = ["linux", "macos"]
             label: None,
             filter: None,
             sort: Vec::new(),
+            group_by: None,
         };
         app.state.agent_view_override = Some(plugin_view.clone());
         app.state.last_plugin_agent_view = Some(plugin_view);
@@ -1397,6 +1398,7 @@ platforms = ["linux", "macos"]
                 label: None,
                 filter: None,
                 sort: Vec::new(),
+                group_by: None,
             }),
         });
         let delayed_restore: crate::api::schema::ErrorResponse =

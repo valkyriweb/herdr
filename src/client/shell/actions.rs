@@ -900,9 +900,9 @@ impl ClientShellState {
                     snapshot,
                     self.config.agent_panel_sort,
                 );
-                Some(Method::PaneFocus(PaneTarget {
-                    pane_id: agents.get(index)?.clone(),
-                }))
+                let pane_id = agents.get(index)?.clone();
+                self.reveal_agent_in_group(&pane_id);
+                Some(Method::PaneFocus(PaneTarget { pane_id }))
             }
             KeybindAction::PreviousAgent | KeybindAction::NextAgent => {
                 let agents = super::agent_sidebar::ordered_agent_pane_ids(
@@ -925,13 +925,17 @@ impl ClientShellState {
                     _ => unreachable!("relative agent action"),
                 };
                 let pane_id = agents[next].clone();
+                // Grouped views add heading rows and fold agents away, so the scroll target is
+                // the item index of the revealed row rather than its agent index. Revealing a group
+                // can raise the maximum offset, so the next render clamps instead of this code.
+                let item_index = self.reveal_agent_in_group(&pane_id).unwrap_or(next);
                 if !self
                     .hits
                     .agents
                     .iter()
                     .any(|(_, visible_pane_id)| visible_pane_id == &pane_id)
                 {
-                    self.agent_scroll = next.min(self.hits.agent_max_scroll);
+                    self.agent_scroll = item_index;
                 }
                 Some(Method::PaneFocus(PaneTarget { pane_id }))
             }

@@ -51,6 +51,7 @@ use crate::server::client_accept::{
     accept_pending_client_connections, reject_pending_client_connections,
 };
 use crate::server::client_shell::{
+    agent_view_projection as client_shell_agent_view,
     render_pane_surface as render_client_shell_pane_surface, snapshot as client_shell_snapshot,
 };
 use crate::server::client_transport::ServerEvent;
@@ -1956,11 +1957,27 @@ impl HeadlessServer {
                             return false;
                         }
                     };
+                let agent_view_message = connection
+                    .take_agent_view_update(client_shell_agent_view(
+                        &self.app,
+                        &self.client_shell_boot_id,
+                    ))
+                    .map(|view| crate::protocol::endpoint::agent_view_message(&view));
+                let agent_view_message = match agent_view_message.transpose() {
+                    Ok(message) => message,
+                    Err(err) => {
+                        warn!(client_id, err = %err, "failed to encode endpoint agent view");
+                        return false;
+                    }
+                };
                 connection.shell_location = Some(location);
                 connection.shell_snapshot = Some(seed_snapshot);
                 self.clients.insert(client_id, connection);
                 if self.app.state.popup_pane.is_some() && self.popup_owner_tab_id.is_none() {
                     self.popup_owner_tab_id = self.shell_tab_id_for_client(client_id);
+                }
+                if let Some(message) = agent_view_message {
+                    self.send_to_client(client_id, message);
                 }
                 self.send_to_client(client_id, snapshot_message);
                 self.foreground_client_id = Some(client_id);

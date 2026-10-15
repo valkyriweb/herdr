@@ -46,6 +46,17 @@ impl ClientShellState {
             ),
             _ => (None, None),
         };
+        let agent_group =
+            super::agent_sidebar::active_group_view(snapshot, self.agent_view.as_ref()).and_then(
+                |view| {
+                    Some(super::agent_sidebar::AgentGroupRender {
+                        token: view.group_by_token.as_deref()?,
+                        folded: self
+                            .agent_group_folds
+                            .get(&super::agent_sidebar::fold_key(view)),
+                    })
+                },
+            );
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
         self.hits = render::render_shell(
             &mut buffer,
@@ -56,6 +67,7 @@ impl ClientShellState {
                 collapsed_groups: &self.collapsed_groups,
                 workspace_scroll: &mut self.workspace_scroll,
                 agent_scroll: &mut self.agent_scroll,
+                agent_group,
                 tab_scroll: &mut self.tab_scroll,
                 reveal_focused_tab: &mut self.reveal_focused_tab,
                 sidebar_collapsed: self.sidebar_collapsed,
