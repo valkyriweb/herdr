@@ -355,6 +355,33 @@ UI 上下文变化时,该投影会重新求值。它控制展开和折叠的侧�
 `sort` 时,现有 `ui.agent_panel_sort` 策略继续生效。自定义排序会临时替换该
 策略,但不会重写配置。
 
+当 `ping` 返回 `capabilities.agent_view_group_by: true` 时,
+可选的 `group_by: {"token":"name"}` 按令牌值在侧栏中显示分组标题。
+该标志缺失或为 false 时,服务器不支持分组。旧服务器可能忽略未知请求字段,因此设置成功
+不代表支持分组。`herdr status --json` 在 `server.capabilities` 下显示相同标志。
+每个标题显示智能体总数
+和需要处理的数量,后者包括 `blocked` 与 `done`。该令牌缺失或值为空的智能体放在最后的 **Other** 组。
+分组按视图中首个智能体的顺序排列,组内顺序保持不变。省略 `group_by` 时保留平铺列表。
+
+点击标题可折叠或展开该组。所有组折叠后,侧栏只显示分组标题。客户端按视图 source 和分组令牌分别保存折叠状态。
+同一连接会话内 clear 和 restore 不会清除该状态,但不会写入磁盘,服务器 boot 变化时会重置。
+分组标题显示在展开的侧栏中。收起的侧栏和移动端 Agents 列表保留分组顺序,不显示折叠标题。
+
+按 `hp_project` 元数据令牌分组的示例:
+
+```json
+{
+  "id": "view_projects",
+  "method": "agent.view.set",
+  "params": {
+    "source": "example.project-views",
+    "label": "projects",
+    "sort": [{"field": {"token": "hp_project"}, "order": "asc"}],
+    "group_by": {"token": "hp_project"}
+  }
+}
+```
+
 `source` 标识所有者。插件使用 `plugin:<HERDR_PLUGIN_ID>`;当所属插件不存在
 或被禁用时,Herdr 会拒绝设置。其他调用方可以使用自己的非 `plugin:` source。
 设置成功会原子替换活动视图。活动视图会在被清除或替换、所属插件被禁用或 unlink、或服务器

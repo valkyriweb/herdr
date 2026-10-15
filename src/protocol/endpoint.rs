@@ -20,6 +20,9 @@ pub const ENDPOINT_SNAPSHOT_KIND: &str = SNAPSHOT_CODEC_V1;
 pub const SURFACE_CODEC_V1: &str = "shell.surface.v1";
 pub const INPUT_CODEC_V1: &str = "shell.input.semantic.v1";
 pub const BLOB_CODEC_V1: &str = "shell.blob.v1";
+/// Optional named control describing agent-view presentation. Clients that do not know the kind
+/// ignore it and render the flat, server-ordered agent list.
+pub const AGENT_VIEW_KIND: &str = "shell.agent_view.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointClientHello {
@@ -59,6 +62,30 @@ pub struct EndpointServerWelcome {
     pub methods: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<EndpointHandshakeError>,
+}
+
+/// Grouping metadata for the active agent view, scoped to one endpoint boot.
+///
+/// This travels beside, not inside, `ClientShellSnapshot` so the frozen snapshot codec is
+/// unchanged. The server already orders `agent_order` with groups contiguous; the client only
+/// needs the token to draw headings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointAgentView {
+    /// Matches `ClientShellSnapshot::boot_id`; metadata for another boot is ignored.
+    pub boot_id: String,
+    /// Owner of the active agent view, used to keep fold state per view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Token to group by. Absent means the active view (if any) is a flat list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by_token: Option<String>,
+}
+
+pub fn agent_view_message(view: &EndpointAgentView) -> serde_json::Result<ServerMessage> {
+    Ok(ServerMessage::EndpointControl {
+        kind: AGENT_VIEW_KIND.into(),
+        data: serde_json::to_string(view)?,
+    })
 }
 
 pub fn snapshot_message(snapshot: &ClientShellSnapshot) -> serde_json::Result<ServerMessage> {
@@ -218,6 +245,39 @@ mod tests {
         assert_eq!(kind, ENDPOINT_SNAPSHOT_KIND);
         let decoded: ClientShellSnapshot = serde_json::from_str(&data).unwrap();
         assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn agent_view_message_is_a_named_json_control_tolerating_future_fields() {
+        let view = EndpointAgentView {
+            boot_id: "boot".into(),
+            source: Some("plugin:example".into()),
+            group_by_token: Some("hp_project".into()),
+        };
+        let ServerMessage::EndpointControl { kind, data } = agent_view_message(&view).unwrap()
+        else {
+            panic!("agent view should use endpoint control");
+        };
+        assert_eq!(kind, AGENT_VIEW_KIND);
+        assert_ne!(kind, ENDPOINT_SNAPSHOT_KIND);
+        assert!(!kind.starts_with("shell.snapshot."));
+        let mut value: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "boot_id": "boot",
+                "source": "plugin:example",
+                "group_by_token": "hp_project",
+            })
+        );
+        value["future_field"] = serde_json::json!(1);
+        assert_eq!(
+            serde_json::from_value::<EndpointAgentView>(value).unwrap(),
+            view
+        );
+        let cleared: EndpointAgentView = serde_json::from_str(r#"{"boot_id":"boot"}"#).unwrap();
+        assert_eq!(cleared.group_by_token, None);
+        assert_eq!(cleared.source, None);
     }
 
     #[test]

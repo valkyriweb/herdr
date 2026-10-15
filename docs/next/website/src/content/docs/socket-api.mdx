@@ -471,6 +471,39 @@ after present values. When `sort` is omitted, the existing
 `ui.agent_panel_sort` policy remains active. A custom sort temporarily replaces
 that policy without rewriting config.
 
+When `ping` reports `capabilities.agent_view_group_by: true`,
+optional `group_by: {"token":"name"}` adds one sidebar heading per token value.
+A missing or false capability means the server does not support grouping. Older
+servers can ignore unknown request fields, so a successful set alone is not a
+grouping-support check. `herdr status --json` exposes the same flag under
+`server.capabilities`.
+Each heading shows the agent count and the count needing attention, which includes
+`blocked` and `done` agents. Agents with a missing or empty token value appear in a final **Other**
+group. Groups follow their first agent in the view order, and each group preserves
+that order. Omitting `group_by` keeps the flat list.
+
+Click a heading to fold or unfold its agents. With every group folded, the sidebar
+shows only the group headings. Fold state belongs to the client and is kept separately for each view source and
+grouping token. It survives clear and restore during the same connection session,
+but is not saved to disk and resets when the server boot changes. Headings appear
+in the expanded sidebar. The collapsed sidebar and mobile Agents list retain
+the grouped agent order without fold headings.
+
+Group agents by their `hp_project` metadata token:
+
+```json
+{
+  "id": "view_projects",
+  "method": "agent.view.set",
+  "params": {
+    "source": "example.project-views",
+    "label": "projects",
+    "sort": [{"field": {"token": "hp_project"}, "order": "asc"}],
+    "group_by": {"token": "hp_project"}
+  }
+}
+```
+
 `source` identifies the owner. Plugins use `plugin:<HERDR_PLUGIN_ID>`; Herdr
 rejects plugin-owned sets when that plugin is missing or disabled. Other callers
 may use their own non-`plugin:` source. A successful set atomically replaces the

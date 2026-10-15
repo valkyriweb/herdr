@@ -2084,6 +2084,17 @@ impl ClientShellState {
                     self.tab_press = Some(tab_press);
                     return;
                 }
+                let group_heading = self
+                    .hits
+                    .agent_group_headings
+                    .iter()
+                    .find(|(rect, _)| super::contains(*rect, point))
+                    .map(|(_, key)| key.clone());
+                if let Some(key) = group_heading {
+                    self.toggle_agent_group(&key);
+                    outcome.repaint = true;
+                    return;
+                }
                 let agent_pane_id = self
                     .hits
                     .agents

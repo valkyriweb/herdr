@@ -5881,3 +5881,150 @@ fn no_handle_internal_event_bypass_in_module() {
         bypass_lines.join("\n  ")
     );
 }
+
+fn grouped_agent_view(token: &str) -> crate::api::schema::AgentViewSetParams {
+    crate::api::schema::AgentViewSetParams {
+        source: "plugin:example.projects".into(),
+        label: Some("projects".into()),
+        filter: None,
+        sort: Vec::new(),
+        group_by: Some(crate::api::schema::AgentViewGroupBy {
+            token: token.into(),
+        }),
+    }
+}
+
+fn agent_view_control(bytes: Vec<u8>) -> crate::protocol::endpoint::EndpointAgentView {
+    let ServerMessage::EndpointControl { kind, data } = read_server_message(bytes) else {
+        panic!("expected an endpoint control");
+    };
+    assert_eq!(kind, crate::protocol::endpoint::AGENT_VIEW_KIND);
+    serde_json::from_str(&data).expect("decode agent view control")
+}
+
+fn drain_control(control_rx: &std::sync::mpsc::Receiver<Vec<u8>>) -> Vec<Vec<u8>> {
+    // The test writer forwards queued messages on a separate thread. Match the existing
+    // control-reader helpers rather than racing that thread with an immediate try_recv.
+    std::iter::from_fn(|| control_rx.recv_timeout(Duration::from_millis(200)).ok()).collect()
+}
+
+fn connect_shell(
+    server: &mut HeadlessServer,
+    client_id: u64,
+) -> (
+    std::sync::mpsc::Receiver<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    let (writer, control_rx, render_rx) = test_client_writer();
+    assert!(
+        server.handle_server_event(ServerEvent::ClientShellConnected {
+            client_id,
+            surface_cols: 80,
+            surface_rows: 23,
+            cell_width_px: 0,
+            cell_height_px: 0,
+            pixel_mouse: false,
+            direct_graphics: false,
+            endpoint_keybindings: false,
+            mouse_capture: false,
+            writer,
+        })
+    );
+    (control_rx, render_rx)
+}
+
+#[tokio::test]
+async fn client_shell_attach_sends_agent_view_control_before_the_snapshot_only_when_grouped() {
+    let mut flat = test_headless_server();
+    let (flat_control, _flat_render) = connect_shell(&mut flat, 61);
+    let flat_messages = drain_control(&flat_control);
+    assert_eq!(
+        flat_messages.len(),
+        1,
+        "ungrouped attach sends only a snapshot"
+    );
+    client_shell_snapshot(read_server_message(flat_messages[0].clone()));
+    shutdown_test_runtimes(&mut flat);
+
+    let mut server = test_headless_server();
+    server.app.state.agent_view_override = Some(grouped_agent_view("hp_project"));
+    let (control_rx, _render_rx) = connect_shell(&mut server, 62);
+    let messages = drain_control(&control_rx);
+    assert_eq!(messages.len(), 2);
+    let view = agent_view_control(messages[0].clone());
+    assert_eq!(view.boot_id, "test-boot");
+    assert_eq!(view.source.as_deref(), Some("plugin:example.projects"));
+    assert_eq!(view.group_by_token.as_deref(), Some("hp_project"));
+    let snapshot = client_shell_snapshot(read_server_message(messages[1].clone()));
+    assert_eq!(snapshot.boot_id, view.boot_id);
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn client_shell_agent_view_control_tracks_group_changes_even_when_the_snapshot_is_unchanged()
+{
+    let mut server = test_headless_server();
+    let (control_rx, render_rx) = connect_shell(&mut server, 63);
+    drain_control(&control_rx);
+    server.render_and_stream();
+    drain_control(&control_rx);
+    while render_rx.try_recv().is_ok() {}
+
+    // Grouping an otherwise identical view changes only the control.
+    server.app.state.agent_view_override = Some(grouped_agent_view("hp_project"));
+    server.render_and_stream();
+    let grouped = drain_control(&control_rx);
+    let first = agent_view_control(grouped[0].clone());
+    assert_eq!(first.group_by_token.as_deref(), Some("hp_project"));
+    while render_rx.try_recv().is_ok() {}
+
+    // Steady state: no repeated control.
+    server.render_and_stream();
+    assert!(drain_control(&control_rx)
+        .into_iter()
+        .all(|bytes| !matches!(
+            read_server_message(bytes),
+            ServerMessage::EndpointControl { kind, .. }
+                if kind == crate::protocol::endpoint::AGENT_VIEW_KIND
+        )));
+    while render_rx.try_recv().is_ok() {}
+
+    // Replacement by another token and by a flat view of the same owner.
+    server.app.state.agent_view_override = Some(grouped_agent_view("branch"));
+    server.render_and_stream();
+    let replaced = agent_view_control(drain_control(&control_rx)[0].clone());
+    assert_eq!(replaced.group_by_token.as_deref(), Some("branch"));
+    while render_rx.try_recv().is_ok() {}
+
+    let mut flat_view = grouped_agent_view("branch");
+    flat_view.group_by = None;
+    server.app.state.agent_view_override = Some(flat_view);
+    server.render_and_stream();
+    let flattened = agent_view_control(drain_control(&control_rx)[0].clone());
+    assert_eq!(flattened.group_by_token, None);
+    assert_eq!(flattened.source, None);
+    while render_rx.try_recv().is_ok() {}
+
+    // Clear then restore of the same grouped view: cleared control, then grouped again.
+    server.app.state.agent_view_override = Some(grouped_agent_view("branch"));
+    server.render_and_stream();
+    assert_eq!(
+        agent_view_control(drain_control(&control_rx)[0].clone()).group_by_token,
+        Some("branch".into())
+    );
+    while render_rx.try_recv().is_ok() {}
+    server.app.state.agent_view_override = None;
+    server.render_and_stream();
+    assert_eq!(
+        agent_view_control(drain_control(&control_rx)[0].clone()).group_by_token,
+        None
+    );
+    while render_rx.try_recv().is_ok() {}
+    server.app.state.agent_view_override = Some(grouped_agent_view("branch"));
+    server.render_and_stream();
+    assert_eq!(
+        agent_view_control(drain_control(&control_rx)[0].clone()).group_by_token,
+        Some("branch".into())
+    );
+    shutdown_test_runtimes(&mut server);
+}

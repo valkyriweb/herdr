@@ -655,6 +655,21 @@ fn install_client_shell_snapshot(
     Ok(())
 }
 
+fn install_client_shell_agent_view(
+    state: &mut ClientState,
+    view: crate::protocol::endpoint::EndpointAgentView,
+) {
+    let composed = state.shell.as_mut().and_then(|shell| {
+        shell
+            .set_agent_view(view)
+            .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
+            .flatten()
+    });
+    if let Some(frame) = composed {
+        state.present_frame(frame);
+    }
+}
+
 fn finish_client_shell_input(
     state: &mut ClientState,
     outcome: shell::ClientShellInput,
@@ -1720,6 +1735,19 @@ async fn run_client_loop(
                     }
                 }
                 ServerMessage::EndpointControl { kind, data } => {
+                    if kind == crate::protocol::endpoint::AGENT_VIEW_KIND {
+                        // Optional presentation metadata: a malformed body must not drop a
+                        // connection that is otherwise healthy.
+                        match serde_json::from_str::<crate::protocol::endpoint::EndpointAgentView>(
+                            &data,
+                        ) {
+                            Ok(view) => install_client_shell_agent_view(&mut state, view),
+                            Err(error) => {
+                                debug!(%error, "ignoring invalid endpoint agent view control");
+                            }
+                        }
+                        continue;
+                    }
                     if kind != crate::protocol::endpoint::ENDPOINT_SNAPSHOT_KIND {
                         if kind.starts_with("shell.snapshot.") {
                             return Err(ClientError::Protocol(protocol::FramingError::Io(

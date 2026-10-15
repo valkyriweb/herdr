@@ -160,6 +160,7 @@ mod tests {
                 value: AgentViewValue::String("working".to_string()),
             }),
             sort: Vec::new(),
+            group_by: None,
         }
     }
 
@@ -195,6 +196,7 @@ mod tests {
             label: Some("projects".to_string()),
             filter,
             sort: Vec::new(),
+            group_by: None,
         }
     }
 
@@ -432,6 +434,71 @@ mod tests {
         let response = app.handle_agent_view_set("invalid".to_string(), invalid);
         let response: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
 
+        assert_eq!(response.error.code, "invalid_agent_view");
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .map(|view| view.source.as_str()),
+            Some("example.views")
+        );
+    }
+
+    fn grouped_projects_view() -> AgentViewSetParams {
+        AgentViewSetParams {
+            group_by: Some(crate::api::schema::AgentViewGroupBy {
+                token: "hp_project".to_string(),
+            }),
+            ..projects_view(None)
+        }
+    }
+
+    #[test]
+    fn grouped_unfiltered_view_is_remembered_and_restored_with_its_group_token() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        let grouped = grouped_projects_view();
+
+        app.handle_agent_view_set("set".to_string(), grouped.clone());
+        assert_eq!(app.state.last_plugin_agent_view, Some(grouped.clone()));
+        app.handle_agent_view_clear("clear".to_string(), AgentViewClearParams::default());
+        assert!(app.state.agent_view_override.is_none());
+
+        assert_eq!(
+            restore_result(&mut app),
+            active_result(&grouped.source, "projects")
+        );
+        assert_eq!(app.state.agent_view_override, Some(grouped));
+    }
+
+    #[test]
+    fn replacing_a_grouped_view_with_a_flat_view_drops_grouping() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        app.handle_agent_view_set("set-grouped".to_string(), grouped_projects_view());
+
+        app.handle_agent_view_set("set-flat".to_string(), working_view("example.views"));
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .and_then(|view| view.group_by.as_ref()),
+            None
+        );
+    }
+
+    #[test]
+    fn invalid_group_token_is_rejected_without_replacing_the_active_view() {
+        let mut app = test_app();
+        app.handle_agent_view_set("set".to_string(), working_view("example.views"));
+        let mut invalid = grouped_projects_view();
+        invalid.source = "example.other".to_string();
+        invalid.group_by = Some(crate::api::schema::AgentViewGroupBy {
+            token: "not valid".to_string(),
+        });
+
+        let response = app.handle_agent_view_set("invalid".to_string(), invalid);
+        let response: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(response.error.code, "invalid_agent_view");
         assert_eq!(
             app.state

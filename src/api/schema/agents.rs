@@ -55,6 +55,16 @@ pub struct AgentViewSetParams {
     pub filter: Option<AgentViewFilter>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sort: Vec<AgentViewSort>,
+    /// Optional grouping. When set, clients draw one foldable heading per distinct value of the
+    /// token. Agents without the token, or with an empty value, form a final `Other` group. Omitted
+    /// means a flat list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_by: Option<AgentViewGroupBy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentViewGroupBy {
+    pub token: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]

@@ -412,6 +412,37 @@ impl HeadlessServer {
                 let Some(client) = self.clients.get_mut(&client_id) else {
                     continue;
                 };
+                // Send grouping metadata before the snapshot it describes. The client matches it by
+                // boot id, so it also applies when the snapshot itself did not change.
+                if let Some(view) = client.take_agent_view_update(
+                    crate::server::client_shell::agent_view_projection(
+                        &self.app,
+                        &self.client_shell_boot_id,
+                    ),
+                ) {
+                    let framed = crate::protocol::endpoint::agent_view_message(&view)
+                        .map_err(|err| err.to_string())
+                        .and_then(|message| {
+                            Self::frame_server_message(&message).map_err(|err| err.to_string())
+                        });
+                    match framed {
+                        Ok(framed) => {
+                            let sent = client
+                                .writer
+                                .as_ref()
+                                .is_some_and(|writer| writer.control.send(framed).is_ok());
+                            if !sent {
+                                broken_clients.push(client_id);
+                                continue;
+                            }
+                        }
+                        Err(err) => {
+                            warn!(client_id, err = %err, "failed to encode endpoint agent view");
+                            broken_clients.push(client_id);
+                            continue;
+                        }
+                    }
+                }
                 let mut candidate = client_shell_snapshot(
                     &self.app,
                     &self.client_shell_boot_id,

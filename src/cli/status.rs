@@ -279,6 +279,7 @@ struct ServerCapabilitiesJson {
     live_handoff: bool,
     detached_server_daemon: bool,
     endpoint_protocol_generation: Option<u32>,
+    agent_view_group_by: bool,
 }
 
 #[derive(Serialize)]
@@ -315,6 +316,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
                     live_handoff: capabilities.live_handoff,
                     detached_server_daemon: capabilities.detached_server_daemon,
                     endpoint_protocol_generation: capabilities.endpoint_protocol_generation,
+                    agent_view_group_by: capabilities.agent_view_group_by,
                 }),
             compatible: protocol.map(|value| value == crate::protocol::PROTOCOL_VERSION),
             endpoint_compatible: capabilities.as_ref().and_then(|capabilities| {
@@ -404,6 +406,7 @@ mod tests {
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: endpoint_generation,
+                agent_view_group_by: true,
             }),
         }
     }

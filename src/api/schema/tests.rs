@@ -733,6 +733,7 @@ fn success_response_round_trips() {
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
+                agent_view_group_by: true,
             }),
         },
     };
@@ -1438,4 +1439,48 @@ fn popup_close_request_round_trips() {
 
     assert_eq!(json["method"], "popup.close");
     assert_eq!(json["params"], serde_json::json!({}));
+}
+
+#[test]
+fn agent_view_set_group_by_is_an_optional_token_object() {
+    let flat: Request = serde_json::from_str(
+        r#"{"id":"1","method":"agent.view.set","params":{"source":"example.views"}}"#,
+    )
+    .unwrap();
+    let Method::AgentViewSet(flat) = flat.method else {
+        panic!("expected agent.view.set");
+    };
+    assert_eq!(flat.group_by, None);
+    let json = serde_json::to_value(&flat).unwrap();
+    assert!(json.get("group_by").is_none(), "flat specs stay unchanged");
+
+    let grouped: Request = serde_json::from_str(
+        r#"{"id":"2","method":"agent.view.set","params":{"source":"example.views","group_by":{"token":"hp_project"}}}"#,
+    )
+    .unwrap();
+    let Method::AgentViewSet(grouped) = grouped.method else {
+        panic!("expected agent.view.set");
+    };
+    assert_eq!(
+        grouped.group_by,
+        Some(AgentViewGroupBy {
+            token: "hp_project".into()
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(&grouped).unwrap()["group_by"],
+        serde_json::json!({"token": "hp_project"})
+    );
+}
+
+#[test]
+fn server_capabilities_default_agent_view_group_by_to_false_for_older_servers() {
+    let older: ServerCapabilities =
+        serde_json::from_str(r#"{"live_handoff":true,"endpoint_protocol_generation":1}"#).unwrap();
+    assert!(!older.agent_view_group_by);
+    let current: ServerCapabilities = serde_json::from_str(
+        r#"{"live_handoff":true,"detached_server_daemon":false,"agent_view_group_by":true}"#,
+    )
+    .unwrap();
+    assert!(current.agent_view_group_by);
 }

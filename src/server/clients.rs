@@ -175,6 +175,8 @@ pub(crate) struct ClientConnection {
     pub(crate) shell_location: Option<ClientShellLocation>,
     /// Last coherent shell replacement sent to this client.
     pub(crate) shell_snapshot: Option<crate::protocol::ClientShellSnapshot>,
+    /// Last agent-view grouping control sent to this client. `None` means none was ever sent.
+    pub(crate) shell_agent_view: Option<crate::protocol::endpoint::EndpointAgentView>,
     /// Monotonic shell replacement revision for this connection.
     pub(crate) shell_projection_revision: u64,
     /// Whether this shell is waiting for one ordered endpoint command response.
@@ -238,6 +240,7 @@ impl ClientConnection {
             staged_clipboard_files: Vec::new(),
             shell_location: None,
             shell_snapshot: None,
+            shell_agent_view: None,
             shell_projection_revision: 0,
             shell_endpoint_command_in_flight: false,
             shell_deferred_navigation_request_id: None,
@@ -249,6 +252,23 @@ impl ClientConnection {
 
     pub(crate) fn request_repaint(&mut self) {
         self.render_state.request_repaint();
+    }
+
+    /// Returns the grouping control to send when `desired` differs from what this client last
+    /// received, and records it. A client that never received grouping needs no "no grouping"
+    /// control, so ungrouped views send nothing to it.
+    pub(crate) fn take_agent_view_update(
+        &mut self,
+        desired: crate::protocol::endpoint::EndpointAgentView,
+    ) -> Option<crate::protocol::endpoint::EndpointAgentView> {
+        let changed = match &self.shell_agent_view {
+            Some(sent) => sent != &desired,
+            None => desired.group_by_token.is_some(),
+        };
+        changed.then(|| {
+            self.shell_agent_view = Some(desired.clone());
+            desired
+        })
     }
 
     pub(crate) fn track_shell_input(
