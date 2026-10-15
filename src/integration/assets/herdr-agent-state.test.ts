@@ -503,8 +503,8 @@ test("Pi preserves a blocked transition while a state report is in flight", asyn
   socketPath = recordingSocketPath;
   await rm(recordingSocketPath, { force: true });
 
-  const { eventHandlers, handlers, pi } = createExtensionHarness();
   const requests: unknown[] = [];
+  let acknowledgeFirstReport: (() => void) | undefined;
   const recordingServer = createServer((socket) => {
     let input = "";
     socket.setEncoding("utf8");
@@ -516,9 +516,8 @@ test("Pi preserves a blocked transition while a state report is in flight", asyn
       }
       requests.push(JSON.parse(input.slice(0, newline)));
       if (requestStates(requests).length === 1) {
-        // Queue both transitions before the initial report receives its reply.
-        eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" }, {});
-        eventHandlers.get("herdr:blocked")?.({ active: false }, {});
+        acknowledgeFirstReport = () => socket.end("{}\n");
+        return;
       }
       socket.end("{}\n");
     });
@@ -526,22 +525,23 @@ test("Pi preserves a blocked transition while a state report is in flight", asyn
   server = recordingServer;
   await new Promise<void>((resolve, reject) => {
     recordingServer.once("error", reject);
-    recordingServer.listen(recordingSocketPath, resolve);
+    recordingServer.listen(originalPlatform === "win32" ? `\\\\.\\pipe\\${recordingSocketPath}` : recordingSocketPath, resolve);
   });
 
   configureIntegrationEnvironment(recordingSocketPath);
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
   const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
   install(pi);
 
   await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => false));
-  await waitFor(() => {
-    const states = requestStates(requests);
-    return states.includes("blocked") && states.at(-1) === "working";
-  });
+  await waitFor(() => acknowledgeFirstReport !== undefined);
 
-  const states = requestStates(requests);
-  const transitions = states.filter((state, index) => index === 0 || state !== states[index - 1]);
-  expect(transitions).toEqual(["working", "blocked", "working"]);
+  eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" }, {});
+  eventHandlers.get("herdr:blocked")?.({ active: false }, {});
+  acknowledgeFirstReport?.();
+
+  await waitFor(() => requestStates(requests).length === 3);
+  expect(requestStates(requests)).toEqual(["working", "blocked", "working"]);
 });
 
 test("Pi reports the session replacement source", async () => {
