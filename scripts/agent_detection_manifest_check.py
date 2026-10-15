@@ -53,26 +53,12 @@ MAX_MATCHERS_PER_GATE = 32
 MAX_TOTAL_MATCHERS = 1024
 MAX_MATCHER_CHARS = 512
 
-# Keep engine-2 clients on the OSC-capable manifest until an engine-3 release
-# can consume top_non_empty_lines. Remove this entry when the distribution
-# publishes the bundled Grok manifest.
-STAGED_PUBLISHED_MANIFESTS = {
-    "grok": (
-        "2026.07.16.2",
-        "2026.07.16.1",
-        "1f35b3271a96cf830c64bed78751619bfd8013c277c0d7c0f999b7a433895f28",
-    ),
-}
+# Keep older-engine clients on a published manifest until a release with the
+# bundled manifest's engine ships. Maps agent id to (bundled version, published
+# version, published sha256). Remove an entry once the bundled manifest ships.
+STAGED_PUBLISHED_MANIFESTS: dict[str, tuple[str, str, str]] = {}
 
-# Muse is bundled on master but has not shipped in a stable binary yet. Stable
-# clients cannot identify it, so publish it with the release that first ships
-# the corresponding Agent variant and remove this exact-content exception.
-UNPUBLISHED_BUNDLED_MANIFESTS = {
-    "muse": (
-        "2026.08.26.1",
-        "b69c4d87fa9c19e3e6453b706fbe39c98a8b33ffbaa48e8cd5ae6751e9615074",
-    ),
-}
+UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {}
 
 
 def parse_args() -> argparse.Namespace:
