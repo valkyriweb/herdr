@@ -476,12 +476,13 @@ rejects plugin-owned sets when that plugin is missing or disabled. Other callers
 may use their own non-`plugin:` source. A successful set atomically replaces the
 active view. The active view lasts until it is cleared or replaced, its owning
 plugin is disabled or unlinked, or the server exits. The
-`herdr plugin uninstall` CLI command unlinks its plugin. The most recent
-unfiltered plugin-owned view in server memory. Clearing the active view does
-not remove this saved view. A filtered plugin view does not replace it. Herdr removes the saved view when its plugin is disabled or unlinked, or
-when another unfiltered plugin view replaces it. Server exit clears it. Plugins
-that want durable behavior should save the query under `HERDR_PLUGIN_STATE_DIR`
-and reapply it from a `[[startup]]` hook.
+`herdr plugin uninstall` CLI command unlinks its plugin. Herdr also keeps the
+most recent unfiltered plugin-owned view in server memory as the saved view.
+Clearing the active view does not remove the saved view. A filtered plugin view
+does not replace it. Herdr removes the saved view when its plugin is disabled or
+unlinked, or when another unfiltered plugin view replaces it. Server exit
+clears it. Plugins that want durable behavior should save the query under
+`HERDR_PLUGIN_STATE_DIR` and reapply it from a `[[startup]]` hook.
 
 Clear unconditionally, or only when the named source still owns the view:
 

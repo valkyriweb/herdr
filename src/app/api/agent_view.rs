@@ -310,6 +310,116 @@ mod tests {
         assert!(app.state.agent_view_override.is_none());
     }
 
+    fn restore_result(app: &mut App) -> ResponseResult {
+        let response = app.handle_agent_view_restore("restore".to_string());
+        let response: crate::api::schema::SuccessResponse =
+            serde_json::from_str(&response).unwrap();
+        response.result
+    }
+
+    fn active_result(source: &str, label: &str) -> ResponseResult {
+        ResponseResult::AgentView {
+            active: true,
+            source: Some(source.to_string()),
+            label: Some(label.to_string()),
+        }
+    }
+
+    #[test]
+    fn restore_replaces_already_active_view() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        let saved = projects_view(None);
+        app.handle_agent_view_set("set-saved".to_string(), saved.clone());
+        app.handle_agent_view_set("set-active".to_string(), working_view("example.views"));
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .map(|view| view.source.as_str()),
+            Some("example.views")
+        );
+
+        assert_eq!(
+            restore_result(&mut app),
+            active_result(&saved.source, "projects")
+        );
+        assert_eq!(app.state.agent_view_override, Some(saved.clone()));
+        assert_eq!(app.state.last_plugin_agent_view, Some(saved));
+    }
+
+    #[test]
+    fn restore_preserves_active_view_and_discards_saved_view_when_plugin_is_disabled() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        app.handle_agent_view_set("set-saved".to_string(), projects_view(None));
+        app.handle_agent_view_set("set-active".to_string(), working_view("example.views"));
+        app.state
+            .installed_plugins
+            .get_mut("example.worktree-bootstrap")
+            .expect("test plugin")
+            .enabled = false;
+
+        assert_eq!(
+            restore_result(&mut app),
+            active_result("example.views", "working")
+        );
+        assert!(app.state.last_plugin_agent_view.is_none());
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .map(|view| view.source.as_str()),
+            Some("example.views")
+        );
+    }
+
+    #[test]
+    fn restore_preserves_active_view_and_discards_saved_view_when_plugin_is_absent() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        app.handle_agent_view_set("set-saved".to_string(), projects_view(None));
+        app.handle_agent_view_set("set-active".to_string(), working_view("example.views"));
+        app.state
+            .installed_plugins
+            .remove("example.worktree-bootstrap");
+
+        assert_eq!(
+            restore_result(&mut app),
+            active_result("example.views", "working")
+        );
+        assert!(app.state.last_plugin_agent_view.is_none());
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .map(|view| view.source.as_str()),
+            Some("example.views")
+        );
+    }
+
+    #[test]
+    fn restore_preserves_active_view_and_discards_invalid_filtered_saved_view() {
+        let mut app = test_app();
+        install_test_plugin(&mut app, true);
+        app.handle_agent_view_set("set-active".to_string(), working_view("example.views"));
+        // Normal set never stores a filtered plugin view; inject one directly.
+        app.state.last_plugin_agent_view = Some(working_view("plugin:example.worktree-bootstrap"));
+
+        assert_eq!(
+            restore_result(&mut app),
+            active_result("example.views", "working")
+        );
+        assert!(app.state.last_plugin_agent_view.is_none());
+        assert_eq!(
+            app.state
+                .agent_view_override
+                .as_ref()
+                .map(|view| view.source.as_str()),
+            Some("example.views")
+        );
+    }
+
     #[test]
     fn invalid_view_does_not_replace_active_view() {
         let mut app = test_app();
