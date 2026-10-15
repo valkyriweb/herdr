@@ -25,7 +25,7 @@ These instructions are layered.
 
 ## Custom fork: valkyriweb/herdr
 
-This checkout is the custom fork valkyriweb/herdr, maintained by the GitHub account valkyriweb. Within this fork, valkyriweb may push branches, open PRs, and merge them after green CI and an independent review.
+This checkout is the custom fork valkyriweb/herdr, maintained by the GitHub account valkyriweb. Within valkyriweb/herdr, valkyriweb acts as the fork's maintainer: it may push branches, open PRs, and merge them after green CI and an independent review.
 The external-contributor guardrail, APPROVED_CONTRIBUTORS, and MAINTAINERS govern contributions to herdrdev/herdr only; they do not restrict work inside this fork.
 Never push branches, open PRs, comment, or file issues on herdrdev/herdr from this fork. Upstreaming requires a separate explicit decision by Luke.
 Upstream syncs merge upstream release tags and keep this section.
