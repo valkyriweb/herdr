@@ -4129,7 +4129,7 @@ mod tests {
             windows.join("SysWOW64").join("cmd.exe"),
         ];
         let mut observations = Vec::new();
-        for shell in shells {
+        for (index, shell) in shells.into_iter().enumerate() {
             let mut child = Command::new(&shell)
                 .args(["/D", "/Q", "/K"])
                 .current_dir(super::normalize_cwd_for_launch_platform(&launch_cwd))
@@ -4149,30 +4149,78 @@ mod tests {
                 }
             };
             let initial = observe(&cwd);
+            // Wait for cmd itself to finish `cd` before sampling its PEB. Otherwise a slow
+            // WOW64 shell start looks the same as a wrong x86 PEB read. The marker holds
+            // cmd's own idea of its directory for the failure message.
+            let marker = std::env::temp_dir().join(format!("{name}-{index}.cwd"));
+            let _ = fs::remove_file(&marker);
             use std::io::Write;
             writeln!(
                 child.stdin.as_ref().unwrap(),
-                "cd /d \"{}\"\r",
-                changed.display()
+                "cd /d \"{}\" && cd > \"{}\"\r",
+                changed.display(),
+                marker.display()
             )
             .expect("change cmd cwd");
+            let marker_deadline = Instant::now() + Duration::from_secs(5);
+            let shell_reported = loop {
+                match fs::read_to_string(&marker) {
+                    Ok(text) if text.ends_with('\n') => break Some(text.trim_end().to_owned()),
+                    _ if Instant::now() >= marker_deadline => break None,
+                    _ => thread::sleep(Duration::from_millis(20)),
+                }
+            };
+            let _ = fs::remove_file(&marker);
             let after_cd = observe(&changed);
+            let raw_descriptor = describe_cwd_descriptor(child.id());
             let pane_cwd = super::pane_process_cwd(child.id());
             let _ = child.kill();
             let _ = child.wait();
-            observations.push((shell, initial, after_cd, pane_cwd));
+            observations.push((
+                shell,
+                initial,
+                shell_reported,
+                after_cd,
+                raw_descriptor,
+                pane_cwd,
+            ));
         }
         let _ = fs::remove_dir_all(&cwd);
-        for (shell, initial, after_cd, pane_cwd) in observations {
+        for (shell, initial, shell_reported, after_cd, raw_descriptor, pane_cwd) in observations {
             assert_eq!(initial, Some(cwd.clone()), "{} launch cwd", shell.display());
+            assert_eq!(
+                shell_reported.as_deref().map(PathBuf::from),
+                Some(changed.clone()),
+                "{} did not report the changed cwd itself",
+                shell.display()
+            );
             assert_eq!(
                 after_cd,
                 Some(changed.clone()),
-                "{} live cd",
+                "{} live cd; raw cwd descriptor after cmd completed cd: {raw_descriptor}",
                 shell.display()
             );
             assert_eq!(pane_cwd, Some(changed.clone()), "ordinary shell owns cwd");
         }
+    }
+
+    fn describe_cwd_descriptor(pid: u32) -> String {
+        let Some(process) = super::ProcessHandle::open(
+            pid,
+            super::PROCESS_QUERY_LIMITED_INFORMATION | super::PROCESS_VM_READ,
+        ) else {
+            return "process not readable".to_owned();
+        };
+        let Some(descriptor) = super::process_cwd_descriptor(process.0) else {
+            return "no cwd descriptor".to_owned();
+        };
+        format!(
+            "length={} maximum_length={} buffer={:p} text={:?}",
+            descriptor.Length,
+            descriptor.MaximumLength,
+            descriptor.Buffer,
+            super::read_unicode_string(process.0, descriptor)
+        )
     }
 
     #[test]
