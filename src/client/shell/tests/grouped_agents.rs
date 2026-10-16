@@ -1,5 +1,4 @@
 use super::*;
-use crate::protocol::endpoint::EndpointAgentView;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -45,12 +44,23 @@ fn grouped_snapshot(agents: Vec<ClientShellAgent>) -> ClientShellSnapshot {
     projected
 }
 
-fn view(boot_id: &str, source: &str, token: Option<&str>) -> EndpointAgentView {
-    EndpointAgentView {
-        boot_id: boot_id.into(),
-        source: token.map(|_| source.to_owned()),
-        group_by_token: token.map(str::to_owned),
+/// The active endpoint's `endpoint.agent-view.v1` view value; `token` is its optional `group_by`.
+fn view(source: &str, token: Option<&str>) -> crate::api::schema::AgentViewSetParams {
+    crate::api::schema::AgentViewSetParams {
+        source: source.to_owned(),
+        label: Some("projects".into()),
+        filter: None,
+        sort: Vec::new(),
+        group_by: token.map(|token| crate::api::schema::AgentViewGroupBy {
+            token: token.to_owned(),
+        }),
     }
+}
+
+/// Announces the view for the snapshot the state currently holds, as the server's
+/// revision-bound projection does.
+fn announce(state: &mut ClientShellState, source: &str, token: Option<&str>) {
+    state.set_test_endpoint_agent_view(&ClientEndpointId::Local, Some(view(source, token)));
 }
 
 fn shell_config() -> ClientShellConfig {
@@ -63,10 +73,11 @@ fn shell_config() -> ClientShellConfig {
 fn grouped_state(
     agents: Vec<ClientShellAgent>,
     token: Option<&str>,
-) -> (ClientShellState, FrameData) {
+) -> (ClientShellState, crate::client::frame_output::ComposedFrame) {
     let mut state = ClientShellState::new(shell_config());
-    assert!(state.set_agent_view(view("boot-1", SOURCE, token)));
+    state.set_agent_view_group_by_supported(true);
     state.set_snapshot(Box::new(grouped_snapshot(agents)));
+    announce(&mut state, SOURCE, token);
     state.set_pane_surface(surface());
     let frame = state.compose(106, 30).expect("grouped sidebar frame");
     (state, frame)
@@ -164,7 +175,7 @@ fn grouped_sidebar_renders_headings_counts_attention_and_other_last() {
     let (state, frame) = grouped_state(standard_agents(), Some(TOKEN));
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▾ alpha 3 !2", "▾ beta 2", "▾ Other 2 !1"]
+        vec!["▾ alpha 3 !1", "▾ beta 2", "▾ Other 2"]
     );
     // Rows keep server order under their headings; the heading rows are hit targets of their own.
     assert_eq!(
@@ -197,7 +208,7 @@ fn grouped_sidebar_renders_headings_counts_attention_and_other_last() {
 }
 
 #[test]
-fn grouped_sidebar_attention_counts_only_blocked_and_done() {
+fn grouped_sidebar_attention_excludes_idle_working_and_unknown() {
     let agents = vec![
         agent("a1", Some("alpha"), AgentStatus::Idle),
         agent("a2", Some("alpha"), AgentStatus::Working),
@@ -219,7 +230,7 @@ fn clicking_a_heading_folds_and_unfolds_without_any_endpoint_action() {
     let frame = state.compose(106, 30).expect("folded frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▸ alpha 3 !2", "▾ beta 2", "▾ Other 2 !1"]
+        vec!["▸ alpha 3 !1", "▾ beta 2", "▾ Other 2"]
     );
     assert_eq!(visible_agents(&state), vec!["b1", "b2", "x1", "x2"]);
     assert_eq!(
@@ -235,7 +246,7 @@ fn clicking_a_heading_folds_and_unfolds_without_any_endpoint_action() {
     let frame = state.compose(106, 30).expect("refolded frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▾ alpha 3 !2", "▾ beta 2", "▸ Other 2 !1"]
+        vec!["▾ alpha 3 !1", "▾ beta 2", "▸ Other 2"]
     );
     assert_eq!(visible_agents(&state), vec!["a1", "a2", "a3", "b1", "b2"]);
 }
@@ -265,7 +276,7 @@ fn all_groups_folded_lists_only_headings_with_counts() {
     let frame = state.compose(106, 30).expect("all folded frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▸ alpha 3 !2", "▸ beta 2", "▸ Other 2 !1"]
+        vec!["▸ alpha 3 !1", "▸ beta 2", "▸ Other 2"]
     );
     assert!(state.hits.agents.is_empty());
     assert_eq!(state.hits.agent_group_headings.len(), 3);
@@ -274,6 +285,24 @@ fn all_groups_folded_lists_only_headings_with_counts() {
     click(&mut state, beta);
     state.compose(106, 30).expect("beta reopened");
     assert_eq!(visible_agents(&state), vec!["b1", "b2"]);
+}
+
+#[test]
+fn group_by_projection_is_flat_without_the_server_capability() {
+    let agents = standard_agents();
+    let mut baseline = ClientShellState::new(shell_config());
+    baseline.set_snapshot(Box::new(grouped_snapshot(agents.clone())));
+    baseline.set_pane_surface(surface());
+    let expected = baseline.compose(106, 30).expect("flat baseline");
+
+    let mut state = ClientShellState::new(shell_config());
+    state.set_agent_view_group_by_supported(false);
+    state.set_snapshot(Box::new(grouped_snapshot(agents)));
+    announce(&mut state, SOURCE, Some(TOKEN));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("flat unsupported view");
+    assert!(state.hits.agent_group_headings.is_empty());
+    assert_eq!(frame_rows(&frame), frame_rows(&expected));
 }
 
 #[test]
@@ -286,16 +315,22 @@ fn flat_views_and_unmatched_metadata_render_exactly_the_old_list() {
     assert!(baseline.hits.agent_group_headings.is_empty());
     assert_eq!(visible_agents(&baseline).len(), 7);
 
-    // A control that names no token, and a control for another boot, change nothing.
-    for announced in [
-        Some(view("boot-1", SOURCE, None)),
-        Some(view("boot-other", SOURCE, Some(TOKEN))),
-    ] {
+    // A view that names no group_by (an upstream server), and a projection for another boot,
+    // change nothing.
+    for other_boot in [false, true] {
         let mut state = ClientShellState::new(shell_config());
-        if let Some(announced) = announced {
-            state.set_agent_view(announced);
-        }
         state.set_snapshot(Box::new(grouped_snapshot(agents.clone())));
+        if other_boot {
+            state.set_endpoint_agent_view_projection_supported(&ClientEndpointId::Local, true);
+            state.set_test_endpoint_agent_view_projection(
+                &ClientEndpointId::Local,
+                "boot-other",
+                1,
+                Some(view(SOURCE, Some(TOKEN))),
+            );
+        } else {
+            announce(&mut state, SOURCE, None);
+        }
         state.set_pane_surface(surface());
         let frame = state.compose(106, 30).expect("flat frame");
         assert!(state.hits.agent_group_headings.is_empty());
@@ -304,11 +339,11 @@ fn flat_views_and_unmatched_metadata_render_exactly_the_old_list() {
 
     // Grouping metadata without an active agent view (priority/default list) is ignored too.
     let mut state = ClientShellState::new(shell_config());
-    state.set_agent_view(view("boot-1", SOURCE, Some(TOKEN)));
     let mut unviewed = grouped_snapshot(agents);
     unviewed.agent_view_label = None;
     unviewed.agent_order.clear();
     state.set_snapshot(Box::new(unviewed));
+    announce(&mut state, SOURCE, Some(TOKEN));
     state.set_pane_surface(surface());
     state.compose(106, 30).expect("unviewed frame");
     assert!(state.hits.agent_group_headings.is_empty());
@@ -330,7 +365,7 @@ fn keyboard_focus_agent_reveals_a_folded_target_group() {
     let frame = state.compose(106, 30).expect("revealed frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▸ alpha 3 !2", "▾ beta 2", "▾ Other 2 !1"]
+        vec!["▸ alpha 3 !1", "▾ beta 2", "▾ Other 2"]
     );
     assert_eq!(visible_agents(&state), vec!["b1", "b2", "x1", "x2"]);
 }
@@ -348,8 +383,9 @@ fn many_group_state(groups: usize, rows: u16) -> ClientShellState {
         })
         .collect::<Vec<_>>();
     let mut state = ClientShellState::new(shell_config());
-    state.set_agent_view(view("boot-1", SOURCE, Some(TOKEN)));
+    state.set_agent_view_group_by_supported(true);
     state.set_snapshot(Box::new(grouped_snapshot(agents)));
+    announce(&mut state, SOURCE, Some(TOKEN));
     state.set_pane_surface(surface());
     state.compose(106, rows).expect("many group frame");
     state
@@ -459,8 +495,8 @@ fn clearing_the_view_removes_headings_and_restoring_it_keeps_session_folds() {
     let mut cleared = snapshot();
     cleared.revision = 2;
     cleared.agents = standard_agents();
-    state.set_agent_view(view("boot-1", SOURCE, None));
     state.set_snapshot(Box::new(cleared));
+    announce(&mut state, SOURCE, None);
     state.set_pane_surface({
         let mut surface = surface();
         surface.projection_revision = 2;
@@ -478,8 +514,8 @@ fn clearing_the_view_removes_headings_and_restoring_it_keeps_session_folds() {
     // Restore the same source and token: the fold comes back without any server involvement.
     let mut restored = grouped_snapshot(standard_agents());
     restored.revision = 3;
-    state.set_agent_view(view("boot-1", SOURCE, Some(TOKEN)));
     state.set_snapshot(Box::new(restored));
+    announce(&mut state, SOURCE, Some(TOKEN));
     state.set_pane_surface({
         let mut surface = surface();
         surface.projection_revision = 3;
@@ -488,18 +524,23 @@ fn clearing_the_view_removes_headings_and_restoring_it_keeps_session_folds() {
     let frame = state.compose(106, 30).expect("restored frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▾ alpha 3 !2", "▸ beta 2", "▾ Other 2 !1"]
+        vec!["▾ alpha 3 !1", "▸ beta 2", "▾ Other 2"]
     );
 
     // Another owner starts with every group open; another token groups by that token instead.
-    for (source, token, headings) in [("plugin:other", TOKEN, 3), (SOURCE, "other_token", 1)] {
+    for (offset, (source, token, headings)) in
+        [("plugin:other", TOKEN, 3), (SOURCE, "other_token", 1)]
+            .into_iter()
+            .enumerate()
+    {
+        let revision = 4 + offset as u64;
         let mut other = grouped_snapshot(standard_agents());
-        other.revision = 4;
-        state.set_agent_view(view("boot-1", source, Some(token)));
+        other.revision = revision;
         state.set_snapshot(Box::new(other));
+        announce(&mut state, source, Some(token));
         state.set_pane_surface({
             let mut surface = surface();
-            surface.projection_revision = 4;
+            surface.projection_revision = revision;
             surface
         });
         state.compose(106, 30).expect("other view frame");
@@ -513,23 +554,23 @@ fn clearing_the_view_removes_headings_and_restoring_it_keeps_session_folds() {
 }
 
 #[test]
-fn agent_view_control_before_the_snapshot_of_a_new_boot_applies_and_stale_control_does_not() {
+fn projection_before_the_snapshot_of_a_new_boot_applies_and_stale_projection_does_not() {
     let (mut state, _) = grouped_state(standard_agents(), Some(TOKEN));
     let beta = state.hits.agent_group_headings[1].0;
     click(&mut state, beta);
     state.compose(106, 30).expect("beta folded");
     assert!(!state.agent_group_folds.is_empty());
+    let revision = state.snapshot.as_deref().expect("snapshot").revision;
 
-    // The server sends its control first; the client still shows boot-1.
-    assert!(state.set_agent_view(view("boot-2", SOURCE, Some(TOKEN))));
-    let frame = state
-        .compose(106, 30)
-        .expect("old boot still flat-or-grouped");
-    assert_eq!(
-        heading_rows(&state, &frame).len(),
-        0,
-        "a control for another boot must not group the boot-1 snapshot"
+    // The server sends boot-2's projection first; boot-1 keeps its own grouping.
+    state.set_test_endpoint_agent_view_projection(
+        &ClientEndpointId::Local,
+        "boot-2",
+        revision,
+        Some(view(SOURCE, Some(TOKEN))),
     );
+    let frame = state.compose(106, 30).expect("boot-1 frame");
+    assert_eq!(heading_rows(&state, &frame).len(), 3);
 
     let mut next_boot = grouped_snapshot(standard_agents());
     next_boot.boot_id = "boot-2".into();
@@ -540,21 +581,25 @@ fn agent_view_control_before_the_snapshot_of_a_new_boot_applies_and_stale_contro
     let frame = state.compose(106, 30).expect("new boot frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▾ alpha 3 !2", "▾ beta 2", "▾ Other 2 !1"],
-        "control received before the snapshot groups it, with folds reset for the new boot"
+        vec!["▾ alpha 3 !1", "▾ beta 2", "▾ Other 2"],
+        "projection received before the snapshot groups it, with folds reset for the new boot"
     );
     assert!(state.agent_group_folds.is_empty());
 
-    // A late control from boot-1 must not group or fold anything of boot-2.
-    state.set_agent_view(view("boot-1", SOURCE, Some("stale_token")));
-    let frame = state.compose(106, 30).expect("stale control frame");
-    assert!(heading_rows(&state, &frame).is_empty());
-    let stale_click = state.hits.agent_group_headings.clone();
-    assert!(stale_click.is_empty());
+    // A late projection from boot-1 must not group or fold anything of boot-2.
+    state.set_test_endpoint_agent_view_projection(
+        &ClientEndpointId::Local,
+        "boot-1",
+        revision,
+        Some(view(SOURCE, Some("stale_token"))),
+    );
+    let frame = state.compose(106, 30).expect("stale projection frame");
+    assert_eq!(heading_rows(&state, &frame).len(), 3);
+    assert!(state.agent_group_folds.is_empty());
 }
 
 #[test]
-fn boot_change_drops_fold_state_and_a_mismatching_view() {
+fn boot_change_drops_fold_state_and_the_old_boots_grouping() {
     let (mut state, _) = grouped_state(standard_agents(), Some(TOKEN));
     let alpha = state.hits.agent_group_headings[0].0;
     click(&mut state, alpha);
@@ -565,10 +610,6 @@ fn boot_change_drops_fold_state_and_a_mismatching_view() {
     rebooted.boot_id = "boot-2".into();
     state.set_snapshot(Box::new(rebooted));
     assert!(state.agent_group_folds.is_empty(), "folds are per boot");
-    assert!(
-        state.agent_view.is_none(),
-        "boot-1 grouping must not outlive its boot"
-    );
     let mut surface = surface();
     surface.boot_id = "boot-2".into();
     state.set_pane_surface(surface);
@@ -578,11 +619,42 @@ fn boot_change_drops_fold_state_and_a_mismatching_view() {
 }
 
 #[test]
-fn identical_agent_view_control_is_not_a_presentation_change() {
-    let mut state = ClientShellState::new(shell_config());
-    assert!(state.set_agent_view(view("boot-1", SOURCE, Some(TOKEN))));
-    assert!(!state.set_agent_view(view("boot-1", SOURCE, Some(TOKEN))));
-    assert!(state.set_agent_view(view("boot-1", SOURCE, None)));
+fn mixed_versions_show_a_flat_list_and_send_no_restore() {
+    // Fork client + upstream server: no agent-view projection support at all, or a projection
+    // whose view has no group_by. Both render the flat list and no heading is a click target.
+    let agents = standard_agents();
+    for supported in [false, true] {
+        let mut state = ClientShellState::new(shell_config());
+        state.set_snapshot(Box::new(grouped_snapshot(agents.clone())));
+        if supported {
+            announce(&mut state, SOURCE, None);
+        } else {
+            state.set_endpoint_agent_view_projection_supported(&ClientEndpointId::Local, false);
+        }
+        state.set_pane_surface(surface());
+        let frame = state.compose(106, 30).expect("flat frame");
+        assert!(heading_rows(&state, &frame).is_empty());
+        assert!(state.hits.agent_group_headings.is_empty());
+        assert_eq!(visible_agents(&state).len(), 7);
+    }
+
+    // Restore is never an endpoint request; the shell only queues an API-socket action, which
+    // the runtime sends only when the server advertises `agent_view_restore`.
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(106, 30).expect("priority frame");
+    let toggle = state.hits.agent_sort_toggle;
+    let input = click(&mut state, toggle);
+    assert!(
+        input
+            .actions
+            .iter()
+            .all(|action| !matches!(action, ClientShellAction::Endpoint { .. })),
+        "restore must never be an endpoint request"
+    );
 }
 
 // Manual scaling profile. `just bench-render-scale` runs it through its `render_scale_profile`
@@ -635,17 +707,18 @@ fn bench_state(agents: usize, mode: BenchMode) -> ClientShellState {
         })
         .collect::<Vec<_>>();
     let mut state = ClientShellState::new(shell_config());
+    state.set_agent_view_group_by_supported(true);
     let mut projected = grouped_snapshot(members);
     projected.boot_id = "bench-boot".into();
-    state.set_agent_view(view(
-        "bench-boot",
+    state.set_snapshot(Box::new(projected));
+    announce(
+        &mut state,
         SOURCE,
         match mode {
             BenchMode::Flat => None,
             _ => Some(TOKEN),
         },
-    ));
-    state.set_snapshot(Box::new(projected));
+    );
     let mut surface = surface();
     surface.boot_id = "bench-boot".into();
     state.set_pane_surface(surface);
