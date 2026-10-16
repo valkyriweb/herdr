@@ -1035,6 +1035,44 @@ mod tests {
     }
 
     #[test]
+    fn restore_plan_resumes_prime_agent_and_rusty_snapshots() {
+        // prime-agent persists under the herdr:pi source with its own label and
+        // a session file path; rusty persists its durable session name as an id.
+        let prime_session_path = test_session_path("prime-session.jsonl");
+        let prime = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:pi".into(),
+            agent: "prime-agent".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Path,
+            value: prime_session_path.clone(),
+        };
+        assert!(restore_plan_for_snapshot(&prime, false).is_none());
+        assert_eq!(
+            restore_plan_for_snapshot(&prime, true).unwrap().argv,
+            vec!["prime-agent", "--resume", prime_session_path.as_str()]
+        );
+
+        let rusty = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:rusty".into(),
+            agent: "rusty".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "fc3c45bb-e1c6-41ab-9c81-f94a733bc1a8".into(),
+        };
+        assert!(restore_plan_for_snapshot(&rusty, false).is_none());
+        assert_eq!(
+            restore_plan_for_snapshot(&rusty, true).unwrap().argv,
+            vec!["rusty", "--resume", "fc3c45bb-e1c6-41ab-9c81-f94a733bc1a8"]
+        );
+
+        let rusty_path = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:rusty".into(),
+            agent: "rusty".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Path,
+            value: test_session_path("rusty-session.jsonl"),
+        };
+        assert!(restore_plan_for_snapshot(&rusty_path, true).is_none());
+    }
+
+    #[test]
     fn restore_plan_selection_suppresses_duplicates() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {

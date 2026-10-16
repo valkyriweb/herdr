@@ -3409,6 +3409,114 @@ mod tests {
     }
 
     #[test]
+    fn hook_reported_prime_agent_and_rusty_sessions_are_process_owned() {
+        // Both agents report lifecycle state through their own reporters and
+        // must register a resumable session on the pane; like every other
+        // official integration, the identity then belongs to the process and
+        // clears on confirmed process exit rather than on a release report.
+        let prime_session = std::env::current_dir()
+            .unwrap()
+            .join("prime-session.jsonl")
+            .display()
+            .to_string();
+        let cases = [
+            (
+                Agent::Prime,
+                "herdr:pi",
+                "prime-agent",
+                crate::agent_resume::AgentSessionRef::path(prime_session.clone()).unwrap(),
+                vec!["prime-agent".to_string(), "--resume".into(), prime_session],
+            ),
+            (
+                Agent::Rusty,
+                "herdr:rusty",
+                "rusty",
+                crate::agent_resume::AgentSessionRef::id("fc3c45bb-e1c6-41ab-9c81-f94a733bc1a8")
+                    .unwrap(),
+                vec![
+                    "rusty".to_string(),
+                    "--resume".into(),
+                    "fc3c45bb-e1c6-41ab-9c81-f94a733bc1a8".into(),
+                ],
+            ),
+        ];
+
+        for (agent, source, agent_label, session_ref, expected_argv) in cases {
+            let mut state = app_with_workspaces(&["active"]);
+            let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+            let terminal_id = state.workspaces[0]
+                .panes
+                .get(&pane_id)
+                .unwrap()
+                .attached_terminal_id
+                .clone();
+
+            state.handle_app_event(AppEvent::StateChanged {
+                pane_id,
+                agent: Some(agent),
+                state: AgentState::Unknown,
+                visible_blocker: false,
+                visible_working: false,
+                process_exited: false,
+                observed_at: std::time::Instant::now(),
+            });
+            state.handle_app_event(AppEvent::HookStateReported {
+                pane_id,
+                source: source.into(),
+                agent_label: agent_label.into(),
+                state: AgentState::Idle,
+                message: None,
+                seq: Some(1),
+                session_ref: Some(session_ref.clone()),
+            });
+
+            let terminal = state.terminals.get(&terminal_id).unwrap();
+            assert_eq!(terminal.state, AgentState::Idle, "{agent_label}");
+            assert_eq!(terminal.effective_agent_label(), Some(agent_label));
+            let authority = terminal
+                .hook_authority
+                .as_ref()
+                .unwrap_or_else(|| panic!("{agent_label} report must own the pane"));
+            assert_eq!(authority.session_ref.as_ref(), Some(&session_ref));
+            assert_eq!(
+                crate::agent_resume::plan(source, agent_label, &session_ref)
+                    .unwrap()
+                    .argv,
+                expected_argv
+            );
+
+            state.handle_app_event(AppEvent::HookAgentReleased {
+                pane_id,
+                source: source.into(),
+                agent_label: agent_label.into(),
+                known_agent: Some(agent),
+                seq: Some(2),
+            });
+            let terminal = state.terminals.get(&terminal_id).unwrap();
+            assert!(
+                terminal.hook_authority.is_some(),
+                "{agent_label} release must leave identity to process exit"
+            );
+
+            state.handle_app_event(AppEvent::StateChanged {
+                pane_id,
+                agent: Some(agent),
+                state: AgentState::Idle,
+                visible_blocker: false,
+                visible_working: false,
+                process_exited: true,
+                observed_at: std::time::Instant::now(),
+            });
+            let terminal = state.terminals.get(&terminal_id).unwrap();
+            assert!(
+                terminal.hook_authority.is_none(),
+                "{agent_label} process exit must clear the session"
+            );
+            assert!(terminal.persisted_agent_session.is_none());
+        }
+    }
+
+    #[test]
     fn official_release_preserves_process_owned_agent_identity() {
         let mut state = app_with_workspaces(&["active"]);
         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
