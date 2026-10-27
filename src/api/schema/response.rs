@@ -42,6 +42,13 @@ pub struct ErrorBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
+    AgentCatalog {
+        agents: Vec<super::AgentCatalogEntry>,
+        diagnostics: Vec<super::AgentBackendDiagnostic>,
+    },
+    ExternalAgent {
+        data: serde_json::Value,
+    },
     Pong {
         version: String,
         protocol: u32,
@@ -181,33 +188,6 @@ pub enum ResponseResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_global: Option<u64>,
     },
-    PaneGraphicsFrameAck {
-        sequence: u64,
-        revision: u64,
-    },
-    PaneGraphicsInfo {
-        cell_width_px: u32,
-        cell_height_px: u32,
-        /// True only when this pane is on the currently rendered terminal surface.
-        pane_visible: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_directory: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        file_frame_formats: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_max_bytes: Option<usize>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_direct_max_bytes: Option<usize>,
-        /// Accepts damage metadata while still consuming a complete canonical file.
-        #[serde(default)]
-        file_frame_damage: bool,
-        #[serde(default)]
-        max_layers_per_pane: usize,
-        #[serde(default)]
-        pixel_mouse: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        file_frame_transport: Option<String>,
-    },
     AgentExplain {
         explain: serde_json::Value,
     },
@@ -274,6 +254,9 @@ pub enum ResponseResult {
         context: PluginInvocationContext,
         log: PluginCommandLogInfo,
     },
+    PaneLinkResolved {
+        regions: Vec<super::panes::PaneLinkRegion>,
+    },
     PaneLinkActivated {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         url: Option<String>,
@@ -294,6 +277,12 @@ pub enum ResponseResult {
     ConfigReload {
         status: crate::config::ConfigReloadStatus,
         diagnostics: Vec<String>,
+    },
+    /// Acknowledgement for the client-shell surface interest lease. This method is new on the
+    /// endpoint protocol, so its revision-bearing result can establish an activation floor.
+    ClientShellSurfaceSet {
+        active: bool,
+        projection_revision: u64,
     },
     Ok {},
 }

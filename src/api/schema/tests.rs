@@ -133,6 +133,7 @@ fn agent_start_and_prompt_requests_round_trip() {
             wait: Some(AgentPromptWaitOptions {
                 until: vec![AgentStatus::Idle, AgentStatus::Done],
                 timeout_ms: Some(120_000),
+                submission_deadline: None,
             }),
         }),
     };
@@ -200,8 +201,7 @@ fn generated_protocol_schema_artifact_is_current() {
         )
     });
     assert_eq!(
-        expected,
-        actual,
+        expected, actual,
         "generated API schema artifact is stale; run `HERDR_UPDATE_API_SCHEMA=1 just test-one generated_protocol_schema_artifact_is_current`"
     );
 }
@@ -734,6 +734,11 @@ fn success_response_round_trips() {
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
                 agent_view_group_by: true,
+                agent_view_restore: true,
+                surface_interest: true,
+                health_check: true,
+                ssh_agent_registration: false,
+                agent_catalog: false,
             }),
         },
     };
@@ -833,6 +838,7 @@ fn worktree_request_and_response_round_trip() {
                 focused: true,
                 cwd: Some("/worktrees/herdr/worktree-api".into()),
                 foreground_cwd: None,
+                restore_error: None,
                 label: None,
                 agent: None,
                 title: None,
@@ -1261,6 +1267,7 @@ fn create_response_round_trips_with_root_pane() {
                 focused: false,
                 cwd: Some("/tmp/review".into()),
                 foreground_cwd: None,
+                restore_error: None,
                 label: None,
                 agent: None,
                 title: None,
@@ -1474,13 +1481,39 @@ fn agent_view_set_group_by_is_an_optional_token_object() {
 }
 
 #[test]
-fn server_capabilities_default_agent_view_group_by_to_false_for_older_servers() {
+fn server_capabilities_default_fork_agent_view_flags_to_false_for_older_servers() {
     let older: ServerCapabilities =
         serde_json::from_str(r#"{"live_handoff":true,"endpoint_protocol_generation":1}"#).unwrap();
     assert!(!older.agent_view_group_by);
+    assert!(!older.agent_view_restore);
     let current: ServerCapabilities = serde_json::from_str(
-        r#"{"live_handoff":true,"detached_server_daemon":false,"agent_view_group_by":true}"#,
+        r#"{"live_handoff":true,"detached_server_daemon":false,"agent_view_group_by":true,"agent_view_restore":true}"#,
     )
     .unwrap();
     assert!(current.agent_view_group_by);
+    assert!(current.agent_view_restore);
+}
+
+#[test]
+fn pane_link_resolve_round_trips() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "hover", "method": "pane.link.resolve",
+        "params": {"pane_id": "pane-1", "viewport_row": 2, "col": 3}
+    }))
+    .unwrap();
+    assert!(matches!(request.method, Method::PaneLinkResolve(_)));
+    let result = ResponseResult::PaneLinkResolved {
+        regions: vec![PaneLinkRegion {
+            row: 2,
+            start_col: 3,
+            end_col: 9,
+        }],
+    };
+    let json = serde_json::to_value(&result).unwrap();
+    assert_eq!(json["type"], "pane_link_resolved");
+    assert_eq!(json["regions"][0]["end_col"], 9);
+    assert_eq!(
+        serde_json::from_value::<ResponseResult>(json).unwrap(),
+        result
+    );
 }

@@ -1,0 +1,69 @@
+---
+title: External agents
+description: Start, read, prompt, stop, and resume T3 Code threads without a terminal pane.
+---
+
+T3 Code threads use the normal `herdr agent` commands. Their IDs are
+`t3:<thread>`; everything after the prefix is an opaque ID that may contain
+colons. A T3 thread has no terminal, workspace, tab, or pane assignment.
+
+Set an absolute path to an approved Bifrost executable in Herdr's config:
+
+```toml
+[server]
+t3_adapter = "/absolute/path/to/bifrost"
+```
+
+The executable must support `bifrost t3 request`. `HERDR_T3_ADAPTER` overrides this
+setting for existing installations. The adapter inherits the Herdr server's
+environment; supply `T3_MCP_ENDPOINT` and an approved `T3_MCP_TOKEN` through your
+credential mechanism. Herdr never mints credentials. Without an adapter setting,
+T3 is disabled. Bifrost owns message delivery and listener supervision.
+
+```sh
+herdr agent list
+herdr agent start worker --kind t3 --scratch --provider codex --model MODEL
+herdr agent start worker --kind t3 --project PROJECT_ID --provider codex --model MODEL --text 'Initial task'
+herdr agent status 't3:<thread>'
+herdr agent read 't3:<thread>' --after-position 100
+herdr agent prompt 't3:<thread>' 'Your prompt' --client-request-id prompt-1
+herdr agent stop 't3:<thread>' --client-request-id stop-1
+herdr agent resume 't3:<thread>' --client-request-id resume-1
+```
+
+Start requires a provider instance, model, and either an existing project ID or
+`--scratch`. It creates a thread and optionally queues the initial prompt. T3
+start does not offer idempotency: after a timeout, inspect the thread list before
+trying again. Herdr does not retry it automatically.
+
+Prompts queue behind current work. Stop interrupts the active run and holds the
+queue; resume releases the held queue. For these three actions, reuse the same
+request ID and payload after an uncertain outcome. Use a new ID for a new action.
+An accepted request is not a completed turn; inspect status and read the output.
+Terminal wait options, focus, attach, and send-keys are unavailable for T3.
+
+Read results include a timeline cursor and truncation metadata. Pass
+`nextPosition` as `--after-position` while `hasMore` is true. Terminal screen
+sources, ANSI output, and line limits are unsupported. Status preserves T3's
+native run state, active run ID, and pending input count.
+
+`agent list` negotiates the `agent_catalog` server capability. With a supporting
+server it returns the neutral `agent.catalog` result, including backend,
+capabilities, normalized status, and optional terminal placement. A failed T3
+listing adds a diagnostic while retaining terminal agents. Older servers keep
+the original terminal-only list result. This changes the CLI JSON output shape
+on supporting servers; scripts that require the original terminal fields should
+call the unchanged JSON socket method `agent.list` directly.
+
+The JSON socket method `agent.external` accepts `action` values `list`, `status`,
+`read`, `prompt`, `start`, `stop`, and `resume`. Start takes `title`, `projectId`
+or `scratch`, `modelSelection: {instanceId, model}`, and optional `text`.
+Prompt, stop, and resume take `target` and `clientRequestId`; prompt also takes
+`text`. Read accepts optional `afterPosition`. Results have type `external_agent`
+and preserve the adapter's `data` receipt. The existing `agent external`
+list/status/read/stdin-prompt commands remain supported.
+
+Adapter calls have an 8 MiB output limit, a five-second list deadline, and a
+two-minute deadline for other actions. Existing JSON terminal methods and the
+generation-1 endpoint retain their published shapes. This does not add a TUI
+pane or a Herdr Projects board entry.

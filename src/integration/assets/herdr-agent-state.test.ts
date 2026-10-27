@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const originalPlatform = process.platform;
+const originalArgv = process.argv;
 const originalCreateConnection = net.createConnection;
 const originalEnvironment = {
   HERDR_ENV: process.env.HERDR_ENV,
@@ -13,6 +14,7 @@ const originalEnvironment = {
   HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
   HERDR_PI_VARIANT: process.env.HERDR_PI_VARIANT,
   PI_LAUNCHER: process.env.PI_LAUNCHER,
+  OMPCODE: process.env.OMPCODE,
 };
 
 let server: Server | undefined;
@@ -36,6 +38,7 @@ afterEach(async () => {
 
   Object.defineProperty(process, "platform", { value: originalPlatform });
   net.createConnection = originalCreateConnection;
+  process.argv = originalArgv;
   for (const [name, value] of Object.entries(originalEnvironment)) {
     if (value === undefined) {
       delete process.env[name];
@@ -87,6 +90,8 @@ function createExtensionHarness() {
 }
 
 function configureIntegrationEnvironment(recordingSocketPath: string) {
+  // Tests may run inside an OMP shell; nested-session cases opt in explicitly.
+  delete process.env.OMPCODE;
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = recordingSocketPath;
   process.env.HERDR_PANE_ID = "test:p1";
@@ -123,7 +128,7 @@ async function startRecordingServer(name: string): Promise<unknown[]> {
   server = recordingServer;
   await new Promise<void>((resolve, reject) => {
     recordingServer.once("error", reject);
-    recordingServer.listen(recordingSocketPath, resolve);
+    recordingServer.listen(originalPlatform === "win32" ? `\\\\.\\pipe\\${recordingSocketPath}` : recordingSocketPath, resolve);
   });
   configureIntegrationEnvironment(recordingSocketPath);
   return requests;
@@ -136,6 +141,7 @@ for (const socketPlugin of socketPlugins) {
     Object.defineProperty(process, "platform", { value: "win32" });
     const connectedEndpoint = captureConnectionEndpoint();
 
+    process.argv = ["bun", "/$bunfs/root/src/index.js", "run"];
     const { HerdrAgentStatePlugin } = await importFresh(socketPlugin.modulePath);
     const plugin = await HerdrAgentStatePlugin();
     await plugin.event({
@@ -231,6 +237,33 @@ for (const integration of integrations) {
   });
 }
 
+test("OMP ignores nested sessions launched inside another OMP shell", async () => {
+  const requests = await startRecordingServer("omp-nested");
+  process.env.OMPCODE = "1";
+  const { handlers, pi } = createExtensionHarness();
+
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+
+  // OMP sets OMPCODE on every shell it spawns. A nested `omp` inherits it and
+  // must not claim the pane's session for its short-lived conversation.
+  expect(handlers.size).toBe(0);
+  await handlers.get("session_start")?.(
+    { reason: "startup" },
+    {
+      hasUI: true,
+      isIdle: () => true,
+      sessionManager: {
+        getSessionFile: () => "/tmp/omp-nested.jsonl",
+        getSessionId: () => "omp-nested",
+      },
+    },
+  );
+  await Bun.sleep(25);
+
+  expect(requests).toEqual([]);
+});
+
 test("OMP accepts POSIX and Windows session paths", async () => {
   const { isAbsoluteSessionPath } = await importFresh("./omp/herdr-agent-state.ts");
 
@@ -252,7 +285,6 @@ test("Pi fork reports pii as its Herdr agent identifier", async () => {
 
   await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => true));
   await waitFor(() => requestStates(requests).length === 1);
-
   const report = requests.find(
     (request) => isRecord(request) && request.method === "pane.report_agent",
   );
@@ -269,11 +301,31 @@ test("Vanilla Pi ignores an inherited fork launcher marker", async () => {
 
   await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => true));
   await waitFor(() => requestStates(requests).length === 1);
-
   const report = requests.find(
     (request) => isRecord(request) && request.method === "pane.report_agent",
   );
   expect(isRecord(report) && isRecord(report.params) ? report.params.agent : null).toBe("pi");
+});
+
+test("Pi reports a Windows session path", async () => {
+  const requests = await startRecordingServer("pi-windows-session-path");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  const sessionPath = "C:\\Users\\User\\.pi\\agent\\sessions\\pi-session.jsonl";
+  await handlers.get("session_start")?.(
+    { reason: "startup" },
+    {
+      ...piContext(() => true),
+      sessionManager: {
+        getSessionFile: () => sessionPath,
+        getSessionId: () => "pi-session",
+      },
+    },
+  );
+  await waitFor(() => requests.length === 2);
+  expect(requests.map(requestSessionPath)).toEqual([sessionPath, sessionPath]);
 });
 
 test("Pi reports idle only after the agent settles", async () => {
@@ -451,8 +503,8 @@ test("Pi preserves a blocked transition while a state report is in flight", asyn
   socketPath = recordingSocketPath;
   await rm(recordingSocketPath, { force: true });
 
+  const { eventHandlers, handlers, pi } = createExtensionHarness();
   const requests: unknown[] = [];
-  let acknowledgeFirstReport: (() => void) | undefined;
   const recordingServer = createServer((socket) => {
     let input = "";
     socket.setEncoding("utf8");
@@ -464,8 +516,9 @@ test("Pi preserves a blocked transition while a state report is in flight", asyn
       }
       requests.push(JSON.parse(input.slice(0, newline)));
       if (requestStates(requests).length === 1) {
-        acknowledgeFirstReport = () => socket.end("{}\n");
-        return;
+        // Queue both transitions before the initial report receives its reply.
+        eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" }, {});
+        eventHandlers.get("herdr:blocked")?.({ active: false }, {});
       }
       socket.end("{}\n");
     });
@@ -473,23 +526,22 @@ test("Pi preserves a blocked transition while a state report is in flight", asyn
   server = recordingServer;
   await new Promise<void>((resolve, reject) => {
     recordingServer.once("error", reject);
-    recordingServer.listen(recordingSocketPath, resolve);
+    recordingServer.listen(originalPlatform === "win32" ? `\\\\.\\pipe\\${recordingSocketPath}` : recordingSocketPath, resolve);
   });
 
   configureIntegrationEnvironment(recordingSocketPath);
-  const { eventHandlers, handlers, pi } = createExtensionHarness();
   const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
   install(pi);
 
   await handlers.get("session_start")?.({ reason: "startup" }, piContext(() => false));
-  await waitFor(() => acknowledgeFirstReport !== undefined);
+  await waitFor(() => {
+    const states = requestStates(requests);
+    return states.includes("blocked") && states.at(-1) === "working";
+  });
 
-  eventHandlers.get("herdr:blocked")?.({ active: true, label: "approval" }, {});
-  eventHandlers.get("herdr:blocked")?.({ active: false }, {});
-  acknowledgeFirstReport?.();
-
-  await waitFor(() => requestStates(requests).length === 3);
-  expect(requestStates(requests)).toEqual(["working", "blocked", "working"]);
+  const states = requestStates(requests);
+  const transitions = states.filter((state, index) => index === 0 || state !== states[index - 1]);
+  expect(transitions).toEqual(["working", "blocked", "working"]);
 });
 
 test("Pi reports the session replacement source", async () => {
@@ -555,7 +607,7 @@ test("Pi waits for a replacement session report before publishing state", async 
   server = recordingServer;
   await new Promise<void>((resolve, reject) => {
     recordingServer.once("error", reject);
-    recordingServer.listen(recordingSocketPath, resolve);
+    recordingServer.listen(originalPlatform === "win32" ? `\\\\.\\pipe\\${recordingSocketPath}` : recordingSocketPath, resolve);
   });
 
   configureIntegrationEnvironment(recordingSocketPath);
@@ -634,7 +686,7 @@ async function startDroppedFirstResponseServer(name: string) {
   server = recordingServer;
   await new Promise<void>((resolve, reject) => {
     recordingServer.once("error", reject);
-    recordingServer.listen(recordingSocketPath, resolve);
+    recordingServer.listen(originalPlatform === "win32" ? `\\\\.\\pipe\\${recordingSocketPath}` : recordingSocketPath, resolve);
   });
 
   configureIntegrationEnvironment(recordingSocketPath);
@@ -798,6 +850,13 @@ function requestState(request: unknown): unknown {
     return undefined;
   }
   return request.params.state;
+}
+
+function requestSessionPath(request: unknown): unknown {
+  if (!isRecord(request) || !isRecord(request.params)) {
+    return undefined;
+  }
+  return request.params.agent_session_path;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

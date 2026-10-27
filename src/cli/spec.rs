@@ -2,6 +2,9 @@ use std::io::Write;
 
 use clap::{Arg, ArgAction, ArgGroup, Command, ValueHint};
 
+mod completion;
+mod machine;
+
 pub(super) fn command() -> Command {
     let command = Command::new("herdr")
         .about("terminal workspace manager for AI coding agents")
@@ -9,6 +12,7 @@ pub(super) fn command() -> Command {
         .disable_version_flag(true)
         .arg(help_flag())
         .arg(option("session", "NAME").help("Use or create a named persistent session"))
+        .arg(option("machine", "LABEL-OR-ID").help("Run an API command on a saved SSH machine"))
         .arg(option("remote", "TARGET").help("Attach through SSH to a remote Herdr server"))
         .arg(
             option("remote-keybindings", "MODE")
@@ -25,11 +29,12 @@ pub(super) fn command() -> Command {
                 .action(ArgAction::SetTrue)
                 .help("Print version and exit"),
         )
-        .subcommand(completion_command())
+        .subcommand(completion::command())
         .subcommand(update_command())
         .subcommand(status_command())
         .subcommand(config_command())
         .subcommand(channel_command())
+        .subcommand(machine::command())
         .subcommand(server_command())
         .subcommand(api_command())
         .subcommand(workspace_command())
@@ -108,19 +113,6 @@ fn write_requested_help(
     Ok(true)
 }
 
-fn completion_command() -> Command {
-    Command::new("completion")
-        .visible_alias("completions")
-        .about("Generate shell completion scripts")
-        .arg(
-            Arg::new("shell")
-                .value_name("SHELL")
-                .required(true)
-                .value_parser(super::completion::SUPPORTED_SHELLS)
-                .help("Shell to generate completions for"),
-        )
-}
-
 fn update_command() -> Command {
     Command::new("update")
         .about("Download and install the latest version")
@@ -165,7 +157,7 @@ fn channel_command() -> Command {
 }
 
 fn server_command() -> Command {
-    Command::new("server")
+    let command = Command::new("server")
         .about("Run or control the headless server")
         .subcommand(Command::new("stop").about("Stop the running server"))
         .subcommand(Command::new("reload-config").about("Reload config in the running server"))
@@ -182,7 +174,13 @@ fn server_command() -> Command {
         .subcommand(
             Command::new("reload-agent-manifests")
                 .about("Reload local agent detection manifest overrides"),
-        )
+        );
+    #[cfg(windows)]
+    let command = command.arg(
+        flag("allow-unelevated-clients")
+            .help("Allow ordinary same-account clients to control this elevated server"),
+    );
+    command
 }
 
 fn api_command() -> Command {
@@ -324,14 +322,26 @@ fn notification_command() -> Command {
 
 fn agent_command() -> Command {
     Command::new("agent")
-        .about("Control and inspect agent panes")
+        .about("Control and inspect terminal and external agents")
+        .subcommand(Command::new("external")
+            .about("Call an external agent adapter without a terminal pane")
+            .subcommand(Command::new("list").about("List external agents"))
+            .subcommand(id_command("status", "target", "Read external agent state"))
+            .subcommand(id_command("read", "target", "Read external agent messages").arg(Arg::new("cursor")))
+            .subcommand(id_command("prompt", "target", "Queue stdin as a prompt").arg(required("clientRequestId", "CLIENT_REQUEST_ID"))))
         .subcommand(Command::new("list").about("List agents"))
         .subcommand(id_command("get", "target", "Show an agent"))
+        .subcommand(id_command("status", "target", "Show agent state"))
+        .subcommand(id_command("stop", "target", "Stop a T3 thread and hold its queue")
+            .arg(option("client-request-id", "ID").required(true)))
+        .subcommand(id_command("resume", "target", "Resume a held T3 queue")
+            .arg(option("client-request-id", "ID").required(true)))
         .subcommand(
             Command::new("read")
-                .about("Read agent terminal output")
+                .about("Read agent output")
                 .override_usage("herdr agent read <TARGET> [OPTIONS]")
                 .arg(required("target", "TARGET"))
+                .arg(option("after-position", "CURSOR").help("T3 timeline cursor"))
                 .arg(read_source_option(true))
                 .arg(option("lines", "N"))
                 .arg(text_ansi_format_option())
@@ -350,6 +360,7 @@ fn agent_command() -> Command {
                 .override_usage("herdr agent prompt <TARGET> <TEXT> [OPTIONS]")
                 .arg(required("target", "TARGET"))
                 .arg(required("text", "TEXT"))
+                .arg(option("client-request-id", "ID").help("Required stable retry key for T3 prompts"))
                 .arg(
                     flag("wait")
                         .help("Wait for the first matching state observed after submission"),
@@ -409,7 +420,7 @@ fn agent_command() -> Command {
         )
         .subcommand(
             Command::new("start")
-                .about("Start a supported interactive agent in an existing pane")
+                .about("Start an agent in a pane or a native T3 thread")
                 .override_usage(
                     "herdr agent start <NAME> --kind <KIND> --pane <ID> [OPTIONS] [-- [AGENT_ARG]...]",
                 )
@@ -417,14 +428,18 @@ fn agent_command() -> Command {
                 .arg(
                     option("kind", "KIND")
                         .required(true)
-                        .value_parser(agent_kind_values())
+                        .value_parser({ let mut kinds = agent_kind_values(); kinds.push("t3"); kinds })
                         .help("Supported agent kind and canonical executable"),
                 )
                 .arg(
                     option("pane", "ID")
-                        .required(true)
                         .help("Existing pane at an interactive shell prompt"),
                 )
+                .arg(option("project", "ID").help("T3 project ID; choose this or --scratch"))
+                .arg(flag("scratch").help("Create a T3 scratch thread"))
+                .arg(option("provider", "INSTANCE").help("T3 provider instance ID"))
+                .arg(option("model", "MODEL").help("T3 provider model"))
+                .arg(option("text", "TEXT").help("Initial prompt for the T3 thread"))
                 .arg(
                     option("timeout", "MS")
                         .help("Wait for interactive readiness (default: 30000; max: 300000)"),
@@ -656,6 +671,7 @@ fn report_agent_command() -> Command {
         .arg(option("seq", "N"))
         .arg(option("agent-session-id", "ID"))
         .arg(path_option("agent-session-path", "PATH"))
+        .arg(resume_argv_arg())
 }
 
 fn report_agent_session_command() -> Command {
@@ -668,6 +684,15 @@ fn report_agent_session_command() -> Command {
         .arg(option("agent-session-id", "ID"))
         .arg(path_option("agent-session-path", "PATH"))
         .arg(option("session-start-source", "SOURCE"))
+        .arg(resume_argv_arg())
+}
+
+fn resume_argv_arg() -> Arg {
+    Arg::new("resume_argv")
+        .value_name("RESUME_ARG")
+        .num_args(0..)
+        .last(true)
+        .help("Command that resumes this session after a Herdr restart; starts with a plain command name")
 }
 
 fn release_agent_command() -> Command {
@@ -802,6 +827,17 @@ fn plugin_command() -> Command {
                 .arg(required("plugin", "PLUGIN")),
         )
         .subcommand(
+            Command::new("update")
+                .about("Update GitHub-installed plugins")
+                .arg(Arg::new("plugins").value_name("PLUGIN").num_args(0..))
+                .arg(
+                    Arg::new("yes")
+                        .short('y')
+                        .long("yes")
+                        .action(ArgAction::SetTrue),
+                ),
+        )
+        .subcommand(
             Command::new("link")
                 .about("Link a local plugin")
                 .arg(path_arg("path", "PATH"))
@@ -905,10 +941,12 @@ fn integration_target_arg() -> Arg {
 }
 
 fn integration_target_values() -> Vec<&'static str> {
-    crate::api::schema::IntegrationTarget::ALL
+    let mut values: Vec<&'static str> = crate::api::schema::IntegrationTarget::ALL
         .into_iter()
         .map(crate::integration::integration_target_label)
-        .collect()
+        .collect();
+    values.extend_from_slice(crate::integration::EXPERIMENTAL_INTEGRATION_TARGET_LABELS);
+    values
 }
 
 fn id_command(name: &'static str, id: &'static str, about: &'static str) -> Command {
@@ -1131,6 +1169,15 @@ mod tests {
     fn spec_matches_all_integration_targets() {
         let cmd = super::command();
         let install = command_path(&cmd, &["integration", "install"]);
+        let mut expected: Vec<String> = crate::api::schema::IntegrationTarget::ALL
+            .map(crate::integration::integration_target_label)
+            .map(str::to_string)
+            .to_vec();
+        expected.extend(
+            crate::integration::EXPERIMENTAL_INTEGRATION_TARGET_LABELS
+                .iter()
+                .map(|label| (*label).to_string()),
+        );
         assert_eq!(
             argument(install, "target")
                 .get_value_parser()
@@ -1138,9 +1185,7 @@ mod tests {
                 .unwrap()
                 .map(|value| value.get_name().to_string())
                 .collect::<Vec<_>>(),
-            crate::api::schema::IntegrationTarget::ALL
-                .map(crate::integration::integration_target_label)
-                .map(str::to_string)
+            expected
         );
     }
 
@@ -1297,8 +1342,9 @@ mod tests {
         assert_eq!(
             option_values(agent_start, "kind"),
             super::agent_kind_values()
-                .iter()
-                .map(|value| (*value).to_string())
+                .into_iter()
+                .chain(["t3"])
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
         );
         assert!(option_values(agent_start, "kind").contains(&"pii".to_string()));
