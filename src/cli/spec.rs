@@ -322,7 +322,13 @@ fn notification_command() -> Command {
 
 fn agent_command() -> Command {
     Command::new("agent")
-        .about("Control and inspect agent panes")
+        .about("Control and inspect terminal and external agents")
+        .subcommand(Command::new("external")
+            .about("Call an external agent adapter without a terminal pane")
+            .subcommand(Command::new("list"))
+            .subcommand(id_command("status", "target", "Read external agent state"))
+            .subcommand(id_command("read", "target", "Read external agent messages").arg(Arg::new("cursor")))
+            .subcommand(id_command("prompt", "target", "Queue stdin as a prompt").arg(required("clientRequestId", "CLIENT_REQUEST_ID"))))
         .subcommand(Command::new("list").about("List agents"))
         .subcommand(id_command("get", "target", "Show an agent"))
         .subcommand(

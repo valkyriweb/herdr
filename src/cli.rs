@@ -25,6 +25,7 @@ macro_rules! println {
 mod agent;
 mod api;
 mod completion;
+mod external_agents;
 mod integration;
 mod machine;
 mod notification;
