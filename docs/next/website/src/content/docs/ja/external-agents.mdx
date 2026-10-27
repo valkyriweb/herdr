@@ -1,0 +1,41 @@
+---
+title: 外部エージェント
+description: ターミナルペインを使わずに T3 Code のスレッドを一覧表示、読み取り、プロンプト送信します。
+---
+
+T3 Code のスレッドには `herdr agent external` からアクセスできます。各スレッドの
+ID は `t3:<thread>` の形式です。接頭辞の後は不透明な識別子で、コロンを含む場合が
+あります。これらのエージェントにはターミナル、ワークスペース、タブ、ペインの割り当てがありません。
+
+Herdr サーバーの環境変数 `HERDR_T3_ADAPTER` に、`bifrost t3 request` をサポートする
+Bifrost 実行ファイルの絶対パスを設定してください。アダプタープロセスはサーバーの
+環境変数を継承します。`T3_MCP_ENDPOINT` と承認済みの `T3_MCP_TOKEN` は既存の
+認証情報管理の仕組みで渡してください。Herdr は認証情報の発行、クライアントの
+ペアリング、リスナーの起動を行いません。実行ファイルが未設定の場合、外部エージェントは無効です。
+
+```sh
+herdr agent external list
+herdr agent external status 't3:<thread>'
+herdr agent external read 't3:<thread>'
+herdr agent external read 't3:<thread>' 100
+printf '%s' 'Your prompt' | herdr agent external prompt 't3:<thread>' 'unique-request-id'
+```
+
+読み取り結果にはタイムラインのカーソルと切り詰め情報が含まれます。`hasMore` が
+true の場合は `nextPosition` を渡して続きを取得します。プロンプトは実行中の作業の
+後にキューへ追加されます。結果が不明な場合は同じリクエスト ID と本文で再試行し、
+新しいプロンプトには新しい ID を使ってください。受理は完了を意味しません。
+ステータスには T3 の実行状態、アクティブな実行 ID、保留中の入力数が保持されます。
+
+対応する JSON API は `agent.external` です。パラメーターは
+`{"action":"list"}`、`{"action":"status","target":"t3:<thread>"}`、
+`{"action":"read","target":"t3:<thread>","afterPosition":100}`、または
+`{"action":"prompt","target":"t3:<thread>","text":"...","clientRequestId":"..."}` です。
+レスポンスの型は `external_agent` で、アダプターからの `data` オブジェクトを含みます。
+
+外部呼び出しは API 接続ワーカーで実行され、制限時間は 2 分、出力上限は 8 MiB です。
+タイムアウトしたプロンプトも、すでに受理されている可能性があります。アダプターは
+シェルコマンドではなく標準入力から JSON を受け取ります。フォーカスや send-keys
+などのターミナル専用操作は利用できません。既存の `agent.list`、ターミナルスナップショット、
+第 1 世代クライアントのエンドポイントは公開済みの形式を維持します。この API は
+サーバーの JSON ソケットから利用でき、TUI ペインや Herdr Projects のボード項目は追加しません。

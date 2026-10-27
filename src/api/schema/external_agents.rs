@@ -44,9 +44,9 @@ impl ExternalAgentParams {
                 target
             }
         };
-        if !target
+        if target
             .strip_prefix("t3:")
-            .is_some_and(|id| !id.trim().is_empty())
+            .is_none_or(|id| id.trim().is_empty())
         {
             return Err("expected t3:<thread> agent ID");
         }

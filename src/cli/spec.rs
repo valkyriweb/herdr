@@ -325,7 +325,7 @@ fn agent_command() -> Command {
         .about("Control and inspect terminal and external agents")
         .subcommand(Command::new("external")
             .about("Call an external agent adapter without a terminal pane")
-            .subcommand(Command::new("list"))
+            .subcommand(Command::new("list").about("List external agents"))
             .subcommand(id_command("status", "target", "Read external agent state"))
             .subcommand(id_command("read", "target", "Read external agent messages").arg(Arg::new("cursor")))
             .subcommand(id_command("prompt", "target", "Queue stdin as a prompt").arg(required("clientRequestId", "CLIENT_REQUEST_ID"))))
