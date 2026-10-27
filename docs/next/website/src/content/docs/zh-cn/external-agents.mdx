@@ -1,0 +1,38 @@
+---
+title: 外部代理
+description: 无需终端窗格，即可列出、读取 T3 Code 线程并发送提示。
+---
+
+通过 `herdr agent external` 可以访问 T3 Code 线程。每个线程的 ID 格式为
+`t3:<thread>`。前缀之后是不透明的标识符，可能包含冒号。这些代理不分配终端、
+工作区、标签页或窗格。
+
+将 Herdr 服务器的 `HERDR_T3_ADAPTER` 环境变量设置为支持 `bifrost t3 request`
+的 Bifrost 可执行文件的绝对路径。适配器进程继承服务器的环境变量。请通过现有的
+凭据管理机制提供 `T3_MCP_ENDPOINT` 和已获批准的 `T3_MCP_TOKEN`。Herdr 不会
+签发凭据、配对客户端或启动监听器。未设置可执行文件路径时，外部代理功能处于禁用状态。
+
+```sh
+herdr agent external list
+herdr agent external status 't3:<thread>'
+herdr agent external read 't3:<thread>'
+herdr agent external read 't3:<thread>' 100
+printf '%s' 'Your prompt' | herdr agent external prompt 't3:<thread>' 'unique-request-id'
+```
+
+读取结果包含时间线游标和截断信息。`hasMore` 为 true 时，传入 `nextPosition`
+即可继续读取。提示会排在当前工作之后。当结果不确定时，请使用相同的请求 ID 和
+文本重试；新提示应使用新的 ID。接受请求并不表示执行完成。状态保留 T3 的运行状态、
+当前运行 ID 和待处理输入数量。
+
+对应的 JSON API 为 `agent.external`，参数可以是
+`{"action":"list"}`、`{"action":"status","target":"t3:<thread>"}`、
+`{"action":"read","target":"t3:<thread>","afterPosition":100}`，或
+`{"action":"prompt","target":"t3:<thread>","text":"...","clientRequestId":"..."}`。
+响应类型为 `external_agent`，其中的 `data` 对象来自适配器。
+
+外部调用在 API 连接工作线程中运行，超时时间为两分钟，输出上限为 8 MiB。
+超时的提示可能已经被接受。适配器通过标准输入接收 JSON，而非 shell 命令。
+聚焦和 send-keys 等仅适用于终端的操作不可用。现有的 `agent.list`、终端快照及
+第一代客户端端点保持其已发布的结构不变。此 API 可通过服务器的 JSON 套接字访问，
+不会添加 TUI 窗格或 Herdr Projects 看板条目。

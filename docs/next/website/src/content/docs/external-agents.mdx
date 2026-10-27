@@ -1,0 +1,43 @@
+---
+title: External agents
+description: List, read, and prompt T3 Code threads without a terminal pane.
+---
+
+T3 Code threads are available through `herdr agent external`. Each thread has an
+ID such as `t3:<thread>`. The remainder of the ID is opaque and can contain colons.
+These agents have no terminal, workspace, tab, or pane assignment.
+
+Configure the Herdr server's `HERDR_T3_ADAPTER` environment variable with the
+absolute path to a Bifrost executable that supports `bifrost t3 request`. The
+adapter process inherits the server environment. Supply `T3_MCP_ENDPOINT` and an
+approved `T3_MCP_TOKEN` through your existing credential mechanism. Herdr does not
+mint credentials, pair a client, or start a listener. Without the executable
+setting, external agents are disabled.
+
+```sh
+herdr agent external list
+herdr agent external status 't3:<thread>'
+herdr agent external read 't3:<thread>'
+herdr agent external read 't3:<thread>' 100
+printf '%s' 'Your prompt' | herdr agent external prompt 't3:<thread>' 'unique-request-id'
+```
+
+Read results include a timeline cursor and truncation metadata. Pass
+`nextPosition` to continue when `hasMore` is true. Prompts queue behind current
+work. Reuse the same request ID and text after an uncertain outcome; use a new ID
+for a new prompt. Acceptance is not completion. Status preserves T3's run state,
+active run ID, and pending input count.
+
+The equivalent JSON API is `agent.external`, with parameters
+`{"action":"list"}`, `{"action":"status","target":"t3:<thread>"}`,
+`{"action":"read","target":"t3:<thread>","afterPosition":100}`, or
+`{"action":"prompt","target":"t3:<thread>","text":"...","clientRequestId":"..."}`.
+The response has type `external_agent` and a `data` object from the adapter.
+
+External calls run on the API connection worker with a two-minute deadline and
+an 8 MiB output limit. A timed-out prompt may already have been accepted. The
+adapter receives JSON on stdin, not a shell command. Terminal-only actions such
+as focus and send-keys are unavailable. Existing `agent.list`, terminal snapshots,
+and the generation-1 client endpoint retain their published shapes. This API
+is available through the server's JSON socket; it does not add a TUI pane or a
+Herdr Projects board entry.

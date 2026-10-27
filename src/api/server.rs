@@ -600,11 +600,23 @@ fn handle_request(
         );
     }
 
+    if let Method::ExternalAgent(params) = &request.method {
+        return match super::external_agents::execute(params) {
+            Ok(data) => serde_json::to_string(&SuccessResponse {
+                id: request.id,
+                result: ResponseResult::ExternalAgent { data },
+            })
+            .unwrap_or_else(|_| "{}".to_owned()),
+            Err(message) => error_response_json(request.id, "external_agent_failed", message),
+        };
+    }
+
     dispatch_to_app(request, api_tx, None, response_write_complete, None)
 }
 
 pub(crate) fn api_method_name(method: &Method) -> &'static str {
     match method {
+        Method::ExternalAgent(_) => "agent.external",
         Method::Ping(_) => "ping",
         Method::ServerStop(_) => "server.stop",
         Method::ServerLiveHandoff(_) => "server.live_handoff",

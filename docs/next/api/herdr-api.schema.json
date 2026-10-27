@@ -2173,6 +2173,91 @@
           ],
           "type": "object"
         },
+        "ExternalAgentParams": {
+          "description": "Runtime-backed agents have their own IDs and do not require terminal placement.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "read",
+                  "type": "string"
+                },
+                "afterPosition": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "target": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "target"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "status",
+                  "type": "string"
+                },
+                "target": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "target"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "action": {
+                  "const": "prompt",
+                  "type": "string"
+                },
+                "clientRequestId": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "target",
+                "text",
+                "clientRequestId"
+              ],
+              "type": "object"
+            }
+          ]
+        },
         "IntegrationInstallParams": {
           "properties": {
             "target": {
@@ -4703,6 +4788,22 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "oneOf": [
+        {
+          "properties": {
+            "method": {
+              "const": "agent.external",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ExternalAgentParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "method": {
@@ -9205,6 +9306,20 @@
         },
         "ResponseResult": {
           "oneOf": [
+            {
+              "properties": {
+                "data": true,
+                "type": {
+                  "const": "external_agent",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "data"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "capabilities": {

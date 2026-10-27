@@ -4,6 +4,7 @@ pub mod agents;
 pub mod commands;
 pub mod common;
 pub mod events;
+pub mod external_agents;
 pub mod integrations;
 pub mod panes;
 pub mod plugins;
@@ -18,6 +19,7 @@ pub use agents::*;
 pub use commands::*;
 pub use common::*;
 pub use events::*;
+pub use external_agents::*;
 pub use integrations::*;
 pub use panes::*;
 pub use plugins::*;
@@ -45,6 +47,8 @@ pub struct Request {
 // the simple serde shape and avoids boxing churn across every caller.
 #[allow(clippy::large_enum_variant)]
 pub enum Method {
+    #[serde(rename = "agent.external")]
+    ExternalAgent(ExternalAgentParams),
     #[serde(rename = "ping")]
     Ping(PingParams),
     #[serde(rename = "server.stop")]
