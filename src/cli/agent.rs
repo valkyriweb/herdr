@@ -16,6 +16,7 @@ pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
     };
 
     match subcommand {
+        "external" => super::external_agents::run(&args[1..]),
         "list" => agent_list(&args[1..]),
         "get" => agent_get(&args[1..]),
         "read" => agent_read(&args[1..]),
@@ -617,6 +618,12 @@ fn wait_for_named_agent(
                     "agent_not_ready",
                     format!("agent {name} is blocked during startup and is not ready for prompts"),
                 ))),
+                Some("unknown")
+                    if expected_kind == "codex"
+                        && agent["interactive_ready"].as_bool() == Some(true) =>
+                {
+                    Some(Ok(agent.clone()))
+                }
                 Some("working" | "unknown") => None,
                 Some("idle" | "done") if agent["interactive_ready"].as_bool() == Some(true) => {
                     Some(Ok(agent.clone()))
@@ -841,7 +848,11 @@ fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
         method: Method::AgentPrompt(AgentPromptParams {
             target: target.clone(),
             text: text.clone(),
-            wait: wait.then_some(AgentPromptWaitOptions { until, timeout_ms }),
+            wait: wait.then_some(AgentPromptWaitOptions {
+                until,
+                timeout_ms,
+                submission_deadline: None,
+            }),
         }),
     })?;
     super::print_response(&response)
@@ -928,6 +939,7 @@ fn agent_read(args: &[String]) -> std::io::Result<i32> {
 
 fn print_agent_help() {
     eprintln!("herdr agent commands:");
+    eprintln!("  herdr agent external <list|read|status|prompt> [t3:<thread>] [clientRequestId]");
     eprintln!("  herdr agent list");
     eprintln!("  herdr agent get <target>");
     eprintln!("  herdr agent read <target> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi]");

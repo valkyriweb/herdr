@@ -10,11 +10,11 @@ use ratatui::{
 
 use super::*;
 
-struct AgentRow {
-    pane_id: String,
-    status: crate::api::schema::AgentStatus,
-    focused: bool,
-    rows: Vec<Vec<crate::ui::ResolvedToken>>,
+pub(super) struct AgentRow {
+    pub(super) pane_id: String,
+    pub(super) status: crate::api::schema::AgentStatus,
+    pub(super) focused: bool,
+    pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
 }
 
 /// Identity of one agent group. `None` is the final group of agents without the group token.
@@ -153,49 +153,44 @@ pub(super) fn agent_item_index(
     None
 }
 
-/// The grouping the endpoint last announced, if it describes the current snapshot's active view.
-pub(super) fn active_group_view<'a>(
-    snapshot: &ClientShellSnapshot,
-    view: Option<&'a crate::protocol::endpoint::EndpointAgentView>,
-) -> Option<&'a crate::protocol::endpoint::EndpointAgentView> {
-    view.filter(|view| {
-        view.boot_id == snapshot.boot_id
-            && snapshot.agent_view_label.is_some()
-            && view.group_by_token.is_some()
-    })
-}
-
-pub(super) fn fold_key(view: &crate::protocol::endpoint::EndpointAgentView) -> (String, String) {
-    (
-        view.source.clone().unwrap_or_default(),
-        view.group_by_token.clone().unwrap_or_default(),
-    )
+/// Fold-state key of one grouped view: its owning source and group token.
+pub(super) fn fold_key(source: &str, token: &str) -> (String, String) {
+    (source.to_owned(), token.to_owned())
 }
 
 impl ClientShellState {
-    /// Records grouping metadata from the endpoint. Returns whether the presentation changed.
-    /// Metadata may arrive before the snapshot of its boot, so it is kept until a snapshot of
-    /// another boot proves it stale.
-    pub(crate) fn set_agent_view(
-        &mut self,
-        view: crate::protocol::endpoint::EndpointAgentView,
-    ) -> bool {
-        if self.agent_view.as_ref() == Some(&view) {
-            return false;
+    /// Grouping is available only for the Local endpoint when its JSON API advertises
+    /// agent_view_group_by. The view comes from the revision-bound projection; absent capability
+    /// or group_by yields a flat list. Returns (source, group token).
+    pub(super) fn active_agent_group_view(&self) -> Option<(String, String)> {
+        if !self.agent_view_group_by_supported || self.active_endpoint_id != ClientEndpointId::Local
+        {
+            return None;
         }
-        self.agent_view = Some(view);
-        true
+        let endpoint = self
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == self.active_endpoint_id)?;
+        if !endpoint.agent_view_projection_supported {
+            return None;
+        }
+        endpoint.snapshot.as_deref()?.agent_view_label.as_ref()?;
+        let Some(Ok(Some(view))) = Self::endpoint_agent_view(endpoint) else {
+            return None;
+        };
+        let group_by = view.group_by.as_ref()?;
+        Some((view.source.clone(), group_by.token.clone()))
     }
 
     /// Folds or unfolds one group of the active grouped view.
     pub(super) fn toggle_agent_group(&mut self, key: &AgentGroupKey) {
-        let Some(snapshot) = self.snapshot.as_deref() else {
+        let Some((source, token)) = self.active_agent_group_view() else {
             return;
         };
-        let Some(view) = active_group_view(snapshot, self.agent_view.as_ref()) else {
-            return;
-        };
-        let folded = self.agent_group_folds.entry(fold_key(view)).or_default();
+        let folded = self
+            .agent_group_folds
+            .entry(fold_key(&source, &token))
+            .or_default();
         if !folded.remove(key) {
             folded.insert(key.clone());
         }
@@ -204,22 +199,21 @@ impl ClientShellState {
     /// Unfolds the group holding `pane_id` and returns its item index, so a keyboard focus jump
     /// never lands on a hidden row.
     pub(super) fn reveal_agent_in_group(&mut self, pane_id: &str) -> Option<usize> {
+        let (source, token) = self.active_agent_group_view()?;
         let snapshot = self.snapshot.as_deref()?;
-        let view = active_group_view(snapshot, self.agent_view.as_ref())?;
-        let token = view.group_by_token.as_deref()?;
         let ordered = ordered_agent_pane_ids(snapshot, self.config.agent_panel_sort);
-        let groups = agent_groups(snapshot, &ordered, token);
+        let groups = agent_groups(snapshot, &ordered, &token);
         let key = groups
             .iter()
             .find(|group| group.pane_ids.iter().any(|id| id == pane_id))?
             .key
             .clone();
-        let fold_key = fold_key(view);
+        let fold_key = fold_key(&source, &token);
         if let Some(folded) = self.agent_group_folds.get_mut(&fold_key) {
             folded.remove(&key);
         }
         let render = AgentGroupRender {
-            token,
+            token: &token,
             folded: self.agent_group_folds.get(&fold_key),
         };
         agent_item_index(&groups, render, pane_id)
@@ -267,8 +261,68 @@ pub(super) fn render_agent_panel(
     group: Option<AgentGroupRender<'_>>,
     hits: &mut ShellHitMap,
 ) {
-    if area.height == 0 {
+    if !render_agent_panel_header(
+        buffer,
+        area,
+        snapshot.agent_view_label.as_deref(),
+        config,
+        hits,
+    ) {
         return;
+    }
+
+    let rows = agent_items(snapshot, config, group);
+    render_agent_list_with_gaps(
+        buffer,
+        area,
+        &rows,
+        snapshot
+            .agent_view_label
+            .as_ref()
+            .map(|_| " no matching agents"),
+        config,
+        agent_scroll,
+        hits,
+        |item| usize::from(item.height()),
+        // Headings sit directly on their first row, so only agent rows are separated by the gap.
+        |index, _| {
+            if index + 1 < rows.len() && matches!(rows[index], AgentItem::Agent(_)) {
+                config.agents.row_gap
+            } else {
+                0
+            }
+        },
+        |buffer, rect, item, hits| match item {
+            AgentItem::Heading {
+                key,
+                label,
+                agents,
+                attention,
+                folded,
+                focused,
+            } => {
+                hits.agent_group_headings.push((rect, key.clone()));
+                render_group_heading(
+                    buffer, rect, label, *agents, *attention, *folded, *focused, config,
+                );
+            }
+            AgentItem::Agent(row) => {
+                hits.agents.push((rect, row.pane_id.clone()));
+                render_agent_row(buffer, rect, row, config);
+            }
+        },
+    );
+}
+
+pub(super) fn render_agent_panel_header(
+    buffer: &mut Buffer,
+    area: Rect,
+    agent_view_label: Option<&str>,
+    config: &ClientShellConfig,
+    hits: &mut ShellHitMap,
+) -> bool {
+    if area.height == 0 {
+        return false;
     }
     put_text(
         buffer,
@@ -279,7 +333,7 @@ pub(super) fn render_agent_panel(
         Style::default().fg(config.palette.surface_dim),
     );
     if area.height < 2 {
-        return;
+        return false;
     }
     put_text(
         buffer,
@@ -291,14 +345,10 @@ pub(super) fn render_agent_panel(
             .fg(config.palette.overlay0)
             .add_modifier(Modifier::BOLD),
     );
-    let sort_label =
-        snapshot
-            .agent_view_label
-            .as_deref()
-            .unwrap_or(match config.agent_panel_sort {
-                crate::config::AgentPanelSortConfig::Spaces => "spaces",
-                crate::config::AgentPanelSortConfig::Priority => "priority",
-            });
+    let sort_label = agent_view_label.unwrap_or(match config.agent_panel_sort {
+        crate::config::AgentPanelSortConfig::Spaces => "grouped",
+        crate::config::AgentPanelSortConfig::Priority => "priority",
+    });
     let sort_width = display_width(sort_label).min(area.width as usize) as u16;
     let sort_rect = Rect::new(
         area.right().saturating_sub(sort_width),
@@ -318,15 +368,60 @@ pub(super) fn render_agent_panel(
         sort_rect.width,
         sort_label,
         Style::default()
-            .fg(if snapshot.agent_view_label.is_some() {
+            .fg(if agent_view_label.is_some() {
                 config.palette.accent
             } else {
                 config.palette.overlay0
             })
             .add_modifier(Modifier::BOLD),
     );
+    true
+}
 
-    let rows = agent_items(snapshot, config, group);
+pub(super) fn render_agent_list<T>(
+    buffer: &mut Buffer,
+    area: Rect,
+    rows: &[T],
+    empty_message: Option<&str>,
+    config: &ClientShellConfig,
+    agent_scroll: &mut usize,
+    hits: &mut ShellHitMap,
+    row_lines: impl Fn(&T) -> usize,
+    render_row: impl FnMut(&mut Buffer, Rect, &T, &mut ShellHitMap),
+) {
+    render_agent_list_with_gaps(
+        buffer,
+        area,
+        rows,
+        empty_message,
+        config,
+        agent_scroll,
+        hits,
+        row_lines,
+        |index, _| {
+            if index + 1 < rows.len() {
+                config.agents.row_gap
+            } else {
+                0
+            }
+        },
+        render_row,
+    );
+}
+
+#[allow(clippy::too_many_arguments)] // Why: one list renderer shared by flat and grouped panels.
+fn render_agent_list_with_gaps<T>(
+    buffer: &mut Buffer,
+    area: Rect,
+    rows: &[T],
+    empty_message: Option<&str>,
+    config: &ClientShellConfig,
+    agent_scroll: &mut usize,
+    hits: &mut ShellHitMap,
+    row_lines: impl Fn(&T) -> usize,
+    gap_after: impl Fn(usize, &T) -> u16,
+    mut render_row: impl FnMut(&mut Buffer, Rect, &T, &mut ShellHitMap),
+) {
     let body = Rect::new(
         area.x,
         area.y.saturating_add(3),
@@ -336,13 +431,13 @@ pub(super) fn render_agent_panel(
     hits.agent_body = body;
     if body.is_empty() || rows.is_empty() {
         *agent_scroll = 0;
-        if !body.is_empty() && snapshot.agent_view_label.is_some() {
+        if let Some(message) = empty_message.filter(|_| !body.is_empty()) {
             put_text(
                 buffer,
                 body.x,
                 body.y,
                 body.width,
-                " no matching agents",
+                message,
                 Style::default()
                     .fg(config.palette.overlay0)
                     .add_modifier(Modifier::DIM),
@@ -351,16 +446,15 @@ pub(super) fn render_agent_panel(
         return;
     }
 
-    let row_heights = rows.iter().map(AgentItem::height).collect::<Vec<_>>();
-    // Headings sit directly on their first row, so only agent rows are separated by the gap.
-    let gap_after = |index: usize| {
-        if index + 1 < rows.len() && matches!(rows[index], AgentItem::Agent(_)) {
-            config.agents.row_gap
-        } else {
-            0
-        }
-    };
-    let gaps = (0..rows.len()).map(gap_after).collect::<Vec<_>>();
+    let row_heights = rows
+        .iter()
+        .map(|row| row_lines(row).max(1).min(u16::MAX as usize) as u16)
+        .collect::<Vec<_>>();
+    let gaps = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| gap_after(index, row))
+        .collect::<Vec<_>>();
     let metrics =
         super::scroll::list_scroll_metrics(&row_heights, &gaps, body.height, *agent_scroll);
     hits.agent_max_scroll = metrics.max_offset_from_bottom;
@@ -371,32 +465,14 @@ pub(super) fn render_agent_panel(
     let show_scrollbar = metrics.max_offset_from_bottom > 0 && body.width > 1;
     let content_width = body.width.saturating_sub(u16::from(show_scrollbar));
     let mut y = body.y;
-    for (index, item) in rows.iter().enumerate().skip(*agent_scroll) {
-        let height = item.height().min(body.height);
+    for (index, row) in rows.iter().enumerate().skip(*agent_scroll) {
+        let height = row_heights[index].min(body.height);
         if y.saturating_add(height) > body.bottom() {
             break;
         }
         let rect = Rect::new(body.x, y, content_width, height);
-        match item {
-            AgentItem::Heading {
-                key,
-                label,
-                agents,
-                attention,
-                folded,
-                focused,
-            } => {
-                hits.agent_group_headings.push((rect, key.clone()));
-                render_group_heading(
-                    buffer, rect, label, *agents, *attention, *folded, *focused, config,
-                );
-            }
-            AgentItem::Agent(row) => {
-                hits.agents.push((rect, row.pane_id.clone()));
-                render_agent_row(buffer, rect, row, config);
-            }
-        }
-        y = y.saturating_add(height).saturating_add(gap_after(index));
+        render_row(buffer, rect, row, hits);
+        y = y.saturating_add(height).saturating_add(gaps[index]);
     }
 
     if show_scrollbar {
@@ -411,7 +487,7 @@ fn agent_items(
     config: &ClientShellConfig,
     group: Option<AgentGroupRender<'_>>,
 ) -> Vec<AgentItem> {
-    let rows = agent_rows(snapshot, config);
+    let rows = agent_rows(snapshot, config, None);
     let Some(group) = group else {
         return rows.into_iter().map(AgentItem::Agent).collect();
     };
@@ -451,75 +527,14 @@ fn agent_items(
     items
 }
 
-fn agent_rows(snapshot: &ClientShellSnapshot, config: &ClientShellConfig) -> Vec<AgentRow> {
+pub(super) fn agent_rows(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    machine: Option<&str>,
+) -> Vec<AgentRow> {
     ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
         .into_iter()
-        .filter_map(|pane_id| {
-            let agent = snapshot
-                .agents
-                .iter()
-                .find(|agent| agent.pane_id == pane_id)?;
-            let workspace = snapshot
-                .workspaces
-                .iter()
-                .find(|workspace| workspace.workspace_id == agent.workspace_id)?;
-            let tab = snapshot.tabs.iter().find(|tab| tab.tab_id == agent.tab_id);
-            let pane = snapshot
-                .panes
-                .iter()
-                .find(|pane| pane.pane_id == agent.pane_id);
-            let tab_count = snapshot
-                .tabs
-                .iter()
-                .filter(|candidate| candidate.workspace_id == agent.workspace_id)
-                .count();
-            let tab_label = tab
-                .filter(|tab| tab_count > 1 || tab.custom_label)
-                .map(|tab| tab.label.as_str());
-            let agent_label = agent
-                .display_agent
-                .as_deref()
-                .or(agent.name.as_deref())
-                .or(agent.agent.as_deref())
-                .or(agent.title.as_deref());
-            let labels = agent
-                .state_labels
-                .iter()
-                .cloned()
-                .collect::<HashMap<_, _>>();
-            let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
-            let state_text = labels
-                .get(status_text(agent.agent_status))
-                .map(String::as_str)
-                .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
-            let canonical_agent = agent
-                .agent
-                .as_deref()
-                .and_then(crate::detect::parse_agent_label);
-            let rows = crate::ui::sidebar_agent_rows(
-                &config.agents,
-                crate::ui::AgentTokenContext {
-                    workspace: &workspace.label,
-                    tab: tab_label,
-                    pane: agent
-                        .title
-                        .as_deref()
-                        .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
-                    agent_label,
-                    terminal_title: agent.terminal_title.as_deref(),
-                    terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
-                    canonical_agent,
-                    tokens: &tokens,
-                },
-                state_text,
-            );
-            Some(AgentRow {
-                pane_id: agent.pane_id.clone(),
-                status: agent.agent_status,
-                focused: agent.focused,
-                rows,
-            })
-        })
+        .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine))
         .collect()
 }
 
@@ -582,7 +597,85 @@ fn render_group_heading(
         .render(rect, buffer);
 }
 
-fn render_agent_row(buffer: &mut Buffer, rect: Rect, row: &AgentRow, config: &ClientShellConfig) {
+pub(super) fn agent_row(
+    snapshot: &ClientShellSnapshot,
+    pane_id: &str,
+    config: &ClientShellConfig,
+    machine: Option<&str>,
+) -> Option<AgentRow> {
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == pane_id)?;
+    let workspace = snapshot
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.workspace_id == agent.workspace_id)?;
+    let tab = snapshot.tabs.iter().find(|tab| tab.tab_id == agent.tab_id);
+    let pane = snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.pane_id == agent.pane_id);
+    let tab_count = snapshot
+        .tabs
+        .iter()
+        .filter(|candidate| candidate.workspace_id == agent.workspace_id)
+        .count();
+    let tab_label = tab
+        .filter(|tab| tab_count > 1 || tab.custom_label)
+        .map(|tab| tab.label.as_str());
+    let agent_label = agent
+        .display_agent
+        .as_deref()
+        .or(agent.name.as_deref())
+        .or(agent.agent.as_deref())
+        .or(agent.title.as_deref());
+    let labels = agent
+        .state_labels
+        .iter()
+        .cloned()
+        .collect::<HashMap<_, _>>();
+    let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    let state_text = labels
+        .get(status_text(agent.agent_status))
+        .map(String::as_str)
+        .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
+    let canonical_agent = agent
+        .agent
+        .as_deref()
+        .and_then(crate::detect::parse_agent_label);
+    let rows = crate::ui::sidebar_agent_rows(
+        &config.agents,
+        crate::ui::AgentTokenContext {
+            machine,
+            workspace: &workspace.label,
+            tab: tab_label,
+            pane: agent
+                .title
+                .as_deref()
+                .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
+            agent_label,
+            terminal_title: agent.terminal_title.as_deref(),
+            terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
+            canonical_agent,
+            tokens: &tokens,
+        },
+        state_text,
+    );
+    Some(AgentRow {
+        pane_id: agent.pane_id.clone(),
+        status: agent.agent_status,
+        focused: agent.focused,
+        rows,
+    })
+}
+
+pub(super) fn render_agent_row(
+    buffer: &mut Buffer,
+    rect: Rect,
+    row: &AgentRow,
+    config: &ClientShellConfig,
+) {
     let palette = &config.palette;
     let row_style = if row.focused {
         Style::default().bg(palette.active_row_bg)
@@ -598,16 +691,8 @@ fn render_agent_row(buffer: &mut Buffer, rect: Rect, row: &AgentRow, config: &Cl
             .fg(palette.subtext0)
             .add_modifier(Modifier::BOLD)
     };
-    let status_style = Style::default()
-        .fg(status_color(row.status, palette))
-        .add_modifier(if row.focused {
-            Modifier::empty()
-        } else {
-            Modifier::DIM
-        });
-    let secondary = Style::default()
-        .fg(palette.overlay0)
-        .add_modifier(Modifier::DIM);
+    let status_style = Style::default().fg(status_color(row.status, palette));
+    let secondary = Style::default().fg(palette.overlay0);
     let icon = (
         status_icon(row.status, config.status_indicators),
         Style::default().fg(status_color(row.status, palette)),
