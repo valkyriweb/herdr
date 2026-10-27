@@ -15,10 +15,18 @@ pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
         return Ok(2);
     };
 
+    if super::external_agents::handles(args) {
+        return super::external_agents::run_native(args);
+    }
+
     match subcommand {
         "external" => super::external_agents::run(&args[1..]),
         "list" => agent_list(&args[1..]),
-        "get" => agent_get(&args[1..]),
+        "get" | "status" => agent_get(&args[1..]),
+        "stop" | "resume" => {
+            eprintln!("agent {subcommand} requires a t3:<thread> target");
+            Ok(2)
+        }
         "read" => agent_read(&args[1..]),
         "send-keys" => agent_send_keys(&args[1..]),
         "prompt" => agent_prompt(&args[1..]),
@@ -442,10 +450,24 @@ fn agent_list(args: &[String]) -> std::io::Result<i32> {
         return Ok(2);
     }
 
-    super::print_response(&super::send_request(&Request {
-        id: "cli:agent:list".into(),
-        method: Method::AgentList(EmptyParams::default()),
-    })?)
+    let client = super::target::api_client()?;
+    let request_id = "cli:agent:list";
+    let status = super::ensure_server_protocol_compatible(&client, request_id)?;
+    let method = if status
+        .capabilities
+        .is_some_and(|capabilities| capabilities.agent_catalog)
+    {
+        Method::AgentCatalog(EmptyParams::default())
+    } else {
+        Method::AgentList(EmptyParams::default())
+    };
+    let response = client
+        .request_value(&Request {
+            id: request_id.into(),
+            method,
+        })
+        .map_err(|err| super::map_server_not_running_or_io(err, request_id, &client))?;
+    super::print_response(&response)
 }
 
 fn agent_get(args: &[String]) -> std::io::Result<i32> {
@@ -941,7 +963,12 @@ fn print_agent_help() {
     eprintln!("herdr agent commands:");
     eprintln!("  herdr agent external <list|read|status|prompt> [t3:<thread>] [clientRequestId]");
     eprintln!("  herdr agent list");
-    eprintln!("  herdr agent get <target>");
+    eprintln!("  herdr agent get|status <target>");
+    eprintln!("  herdr agent stop|resume t3:<thread> --client-request-id ID");
+    eprintln!("  herdr agent start <name> --kind t3 --project ID|--scratch --provider INSTANCE --model MODEL [--text TEXT]");
+    eprintln!(
+        "  T3 prompts require --client-request-id ID; T3 reads support --after-position CURSOR"
+    );
     eprintln!("  herdr agent read <target> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi]");
     eprintln!("  herdr agent send-keys <target> <key> [key ...]");
     eprintln!("  herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]");

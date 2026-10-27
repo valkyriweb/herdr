@@ -77,6 +77,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         surface_interest: true,
         health_check: true,
         ssh_agent_registration: false,
+        agent_catalog: true,
     })
 }
 
@@ -600,6 +601,30 @@ fn handle_request(
         );
     }
 
+    if let Method::AgentCatalog(_) = &request.method {
+        let response = dispatch_to_app(
+            Request {
+                id: request.id.clone(),
+                method: Method::AgentList(super::schema::EmptyParams::default()),
+            },
+            api_tx,
+            None,
+            None,
+            None,
+        );
+        let Ok(SuccessResponse {
+            result: ResponseResult::AgentList { agents },
+            ..
+        }) = serde_json::from_str::<SuccessResponse>(&response)
+        else {
+            return response;
+        };
+        return serde_json::to_string(&SuccessResponse {
+            id: request.id,
+            result: super::agent_catalog::collect(agents),
+        })
+        .unwrap_or_else(|_| "{}".to_owned());
+    }
     if let Method::ExternalAgent(params) = &request.method {
         return match super::external_agents::execute(params) {
             Ok(data) => serde_json::to_string(&SuccessResponse {
@@ -616,6 +641,7 @@ fn handle_request(
 
 pub(crate) fn api_method_name(method: &Method) -> &'static str {
     match method {
+        Method::AgentCatalog(_) => "agent.catalog",
         Method::ExternalAgent(_) => "agent.external",
         Method::Ping(_) => "ping",
         Method::ServerStop(_) => "server.stop",
@@ -1517,6 +1543,7 @@ mod tests {
                 surface_interest: true,
                 health_check: true,
                 ssh_agent_registration: false,
+                agent_catalog: false,
             }),
             None,
             None,

@@ -17,6 +17,12 @@
       "title": "Server",
       "keys": [
         {
+          "key": "server.t3_adapter",
+          "type": "string",
+          "default": "unset",
+          "description": "Absolute path to an approved Bifrost executable supporting t3 request. Omit to disable T3 agents. HERDR_T3_ADAPTER overrides this setting; changes apply on the next adapter call."
+        },
+        {
           "key": "server.allow_unelevated_clients",
           "type": "boolean",
           "default": "false",

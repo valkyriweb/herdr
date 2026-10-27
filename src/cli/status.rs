@@ -283,6 +283,7 @@ struct ServerCapabilitiesJson {
     surface_interest: bool,
     health_check: bool,
     ssh_agent_registration: bool,
+    agent_catalog: bool,
 }
 
 #[derive(Serialize)]
@@ -331,6 +332,7 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
                     surface_interest: capabilities.surface_interest,
                     health_check: capabilities.health_check,
                     ssh_agent_registration: capabilities.ssh_agent_registration,
+                    agent_catalog: capabilities.agent_catalog,
                 }),
             compatible: protocol.map(|value| value == crate::protocol::PROTOCOL_VERSION),
             endpoint_compatible: capabilities.as_ref().and_then(|capabilities| {
@@ -431,6 +433,7 @@ mod tests {
                 surface_interest: true,
                 health_check: true,
                 ssh_agent_registration: false,
+                agent_catalog: false,
             }),
         }
     }

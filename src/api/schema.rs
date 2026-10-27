@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+pub mod agent_catalog;
 pub mod agents;
 pub mod commands;
 pub mod common;
@@ -15,6 +16,7 @@ pub mod tabs;
 pub mod workspaces;
 pub mod worktrees;
 
+pub use agent_catalog::*;
 pub use agents::*;
 pub use commands::*;
 pub use common::*;
@@ -47,6 +49,8 @@ pub struct Request {
 // the simple serde shape and avoids boxing churn across every caller.
 #[allow(clippy::large_enum_variant)]
 pub enum Method {
+    #[serde(rename = "agent.catalog")]
+    AgentCatalog(EmptyParams),
     #[serde(rename = "agent.external")]
     ExternalAgent(ExternalAgentParams),
     #[serde(rename = "ping")]

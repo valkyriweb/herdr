@@ -1112,7 +1112,7 @@ impl App {
             Method::TabRename(params) => return self.handle_tab_rename(request.id, params),
             Method::TabMove(params) => return self.handle_tab_move(request.id, params),
             Method::TabClose(target) => return self.handle_tab_close(request.id, target),
-            Method::ExternalAgent(_) => {
+            Method::ExternalAgent(_) | Method::AgentCatalog(_) => {
                 return responses::encode_error(
                     request.id,
                     "server_only",

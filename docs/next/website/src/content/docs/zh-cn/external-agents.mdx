@@ -1,38 +1,57 @@
 ---
 title: 外部代理
-description: 无需终端窗格，即可列出、读取 T3 Code 线程并发送提示。
+description: 无需终端窗格即可启动、读取、提示、停止和恢复 T3 Code 线程。
 ---
 
-通过 `herdr agent external` 可以访问 T3 Code 线程。每个线程的 ID 格式为
-`t3:<thread>`。前缀之后是不透明的标识符，可能包含冒号。这些代理不分配终端、
-工作区、标签页或窗格。
+T3 Code 线程使用常规 `herdr agent` 命令，ID 为 `t3:<thread>`。
+前缀后的标识符可能包含冒号。T3 线程没有终端、工作区、标签页或窗格分配。
 
-将 Herdr 服务器的 `HERDR_T3_ADAPTER` 环境变量设置为支持 `bifrost t3 request`
-的 Bifrost 可执行文件的绝对路径。适配器进程继承服务器的环境变量。请通过现有的
-凭据管理机制提供 `T3_MCP_ENDPOINT` 和已获批准的 `T3_MCP_TOKEN`。Herdr 不会
-签发凭据、配对客户端或启动监听器。未设置可执行文件路径时，外部代理功能处于禁用状态。
+在 Herdr 配置中指定已批准的 Bifrost 可执行文件绝对路径：
 
-```sh
-herdr agent external list
-herdr agent external status 't3:<thread>'
-herdr agent external read 't3:<thread>'
-herdr agent external read 't3:<thread>' 100
-printf '%s' 'Your prompt' | herdr agent external prompt 't3:<thread>' 'unique-request-id'
+```toml
+[server]
+t3_adapter = "/absolute/path/to/bifrost"
 ```
 
-读取结果包含时间线游标和截断信息。`hasMore` 为 true 时，传入 `nextPosition`
-即可继续读取。提示会排在当前工作之后。当结果不确定时，请使用相同的请求 ID 和
-文本重试；新提示应使用新的 ID。接受请求并不表示执行完成。状态保留 T3 的运行状态、
-当前运行 ID 和待处理输入数量。
+该文件必须支持 `bifrost t3 request`。`HERDR_T3_ADAPTER` 环境变量优先于配置。
+适配器继承 Herdr 服务器的环境；请通过现有凭据机制提供 `T3_MCP_ENDPOINT` 和
+已批准的 `T3_MCP_TOKEN`。Herdr 不会创建凭据。未配置适配器时 T3 处于禁用状态。
+消息投递和监听器监督由 Bifrost 负责。
 
-对应的 JSON API 为 `agent.external`，参数可以是
-`{"action":"list"}`、`{"action":"status","target":"t3:<thread>"}`、
-`{"action":"read","target":"t3:<thread>","afterPosition":100}`，或
-`{"action":"prompt","target":"t3:<thread>","text":"...","clientRequestId":"..."}`。
-响应类型为 `external_agent`，其中的 `data` 对象来自适配器。
+```sh
+herdr agent list
+herdr agent start worker --kind t3 --scratch --provider codex --model MODEL
+herdr agent start worker --kind t3 --project PROJECT_ID --provider codex --model MODEL --text 'Initial task'
+herdr agent status 't3:<thread>'
+herdr agent read 't3:<thread>' --after-position 100
+herdr agent prompt 't3:<thread>' 'Your prompt' --client-request-id prompt-1
+herdr agent stop 't3:<thread>' --client-request-id stop-1
+herdr agent resume 't3:<thread>' --client-request-id resume-1
+```
 
-外部调用在 API 连接工作线程中运行，超时时间为两分钟，输出上限为 8 MiB。
-超时的提示可能已经被接受。适配器通过标准输入接收 JSON，而非 shell 命令。
-聚焦和 send-keys 等仅适用于终端的操作不可用。现有的 `agent.list`、终端快照及
-第一代客户端端点保持其已发布的结构不变。此 API 可通过服务器的 JSON 套接字访问，
-不会添加 TUI 窗格或 Herdr Projects 看板条目。
+启动需要提供者实例、模型，以及现有项目 ID 或 `--scratch`。可选的 `--text`
+会提交首条提示。启动没有幂等保证；超时后请先查看线程列表再重试，Herdr 不会自动重试。
+
+提示会排在当前任务之后。停止会中断活动运行并暂停队列，恢复会解除队列暂停。
+提示、停止和恢复的结果不确定时，请使用相同请求 ID 和内容重试；新操作使用新 ID。
+接受请求不代表任务完成，请通过 `status` 和 `read` 检查。T3 不支持终端等待选项、
+focus、attach 或 send-keys。
+
+读取结果包含时间线游标和截断信息。当 `hasMore` 为 true 时，将 `nextPosition`
+作为 `--after-position` 继续读取。不支持终端屏幕来源、ANSI 或行数限制。
+状态保留 T3 的运行状态、活动运行 ID 和待输入数量。
+
+`agent list` 会协商服务器的 `agent_catalog` 能力。支持时返回后端、能力、标准化
+状态和可选的终端位置。T3 列表失败时仍返回终端代理及诊断信息。旧服务器保留原有
+仅终端列表格式。支持此能力的服务器会改变 CLI 的 JSON 输出格式；需要原有终端
+字段的脚本应直接调用保持不变的 JSON 套接字方法 `agent.list`。
+
+JSON 套接字方法 `agent.external` 接受 `list`、`status`、`read`、`prompt`、
+`start`、`stop` 和 `resume`。启动参数为 `title`、`projectId` 或 `scratch`、
+`modelSelection: {instanceId, model}` 和可选 `text`。提示、停止和恢复需要
+`target` 与 `clientRequestId`；提示还需要 `text`。读取可使用 `afterPosition`。
+结果类型为 `external_agent`，`data` 保留适配器回执。旧的 `agent external`
+列表、状态、读取和标准输入提示命令仍可使用。
+
+输出上限为 8 MiB，列表超时为 5 秒，其余操作为 2 分钟。现有 JSON 终端方法和
+第 1 代端点保持原有格式；不会创建 TUI 窗格或 Herdr Projects 看板条目。

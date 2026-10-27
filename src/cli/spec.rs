@@ -331,11 +331,17 @@ fn agent_command() -> Command {
             .subcommand(id_command("prompt", "target", "Queue stdin as a prompt").arg(required("clientRequestId", "CLIENT_REQUEST_ID"))))
         .subcommand(Command::new("list").about("List agents"))
         .subcommand(id_command("get", "target", "Show an agent"))
+        .subcommand(id_command("status", "target", "Show agent state"))
+        .subcommand(id_command("stop", "target", "Stop a T3 thread and hold its queue")
+            .arg(option("client-request-id", "ID").required(true)))
+        .subcommand(id_command("resume", "target", "Resume a held T3 queue")
+            .arg(option("client-request-id", "ID").required(true)))
         .subcommand(
             Command::new("read")
-                .about("Read agent terminal output")
+                .about("Read agent output")
                 .override_usage("herdr agent read <TARGET> [OPTIONS]")
                 .arg(required("target", "TARGET"))
+                .arg(option("after-position", "CURSOR").help("T3 timeline cursor"))
                 .arg(read_source_option(true))
                 .arg(option("lines", "N"))
                 .arg(text_ansi_format_option())
@@ -354,6 +360,7 @@ fn agent_command() -> Command {
                 .override_usage("herdr agent prompt <TARGET> <TEXT> [OPTIONS]")
                 .arg(required("target", "TARGET"))
                 .arg(required("text", "TEXT"))
+                .arg(option("client-request-id", "ID").help("Required stable retry key for T3 prompts"))
                 .arg(
                     flag("wait")
                         .help("Wait for the first matching state observed after submission"),
@@ -413,7 +420,7 @@ fn agent_command() -> Command {
         )
         .subcommand(
             Command::new("start")
-                .about("Start a supported interactive agent in an existing pane")
+                .about("Start an agent in a pane or a native T3 thread")
                 .override_usage(
                     "herdr agent start <NAME> --kind <KIND> --pane <ID> [OPTIONS] [-- [AGENT_ARG]...]",
                 )
@@ -421,14 +428,18 @@ fn agent_command() -> Command {
                 .arg(
                     option("kind", "KIND")
                         .required(true)
-                        .value_parser(agent_kind_values())
+                        .value_parser({ let mut kinds = agent_kind_values(); kinds.push("t3"); kinds })
                         .help("Supported agent kind and canonical executable"),
                 )
                 .arg(
                     option("pane", "ID")
-                        .required(true)
                         .help("Existing pane at an interactive shell prompt"),
                 )
+                .arg(option("project", "ID").help("T3 project ID; choose this or --scratch"))
+                .arg(flag("scratch").help("Create a T3 scratch thread"))
+                .arg(option("provider", "INSTANCE").help("T3 provider instance ID"))
+                .arg(option("model", "MODEL").help("T3 provider model"))
+                .arg(option("text", "TEXT").help("Initial prompt for the T3 thread"))
                 .arg(
                     option("timeout", "MS")
                         .help("Wait for interactive readiness (default: 30000; max: 300000)"),
@@ -1331,8 +1342,9 @@ mod tests {
         assert_eq!(
             option_values(agent_start, "kind"),
             super::agent_kind_values()
-                .iter()
-                .map(|value| (*value).to_string())
+                .into_iter()
+                .chain(["t3"])
+                .map(str::to_owned)
                 .collect::<Vec<_>>()
         );
         assert!(option_values(agent_start, "kind").contains(&"pii".to_string()));

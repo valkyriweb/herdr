@@ -1,3 +1,4 @@
+mod agent_catalog;
 pub mod client;
 mod event_hub;
 mod external_agents;

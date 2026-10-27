@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -10,15 +11,31 @@ const MAX_OUTPUT: u64 = 8 * 1024 * 1024;
 
 pub(super) fn execute(params: &ExternalAgentParams) -> Result<serde_json::Value, String> {
     params.validate().map_err(str::to_owned)?;
-    let executable = std::env::var_os("HERDR_T3_ADAPTER").ok_or_else(|| {
-        "external agents are disabled; set HERDR_T3_ADAPTER to an approved adapter executable"
-            .to_owned()
+    let executable = configured_executable()?.ok_or_else(|| {
+        "T3 is disabled; set server.t3_adapter to an approved adapter executable".to_owned()
     })?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|_| "could not start external adapter runtime".to_owned())?;
-    runtime.block_on(invoke(Path::new(&executable), params))
+    runtime.block_on(invoke(&executable, params))
+}
+
+pub(super) fn configured_executable() -> Result<Option<PathBuf>, String> {
+    if let Some(path) = std::env::var_os("HERDR_T3_ADAPTER") {
+        return Ok(Some(PathBuf::from(path)));
+    }
+    let loaded = crate::config::load_live_config().map_err(|_| {
+        "could not read T3 adapter configuration; check the Herdr config".to_owned()
+    })?;
+    if loaded
+        .invalid_sections
+        .iter()
+        .any(|section| section == "server")
+    {
+        return Err("invalid server configuration; check server.t3_adapter".to_owned());
+    }
+    Ok(loaded.config.server.t3_adapter)
 }
 
 async fn invoke(
@@ -26,7 +43,7 @@ async fn invoke(
     params: &ExternalAgentParams,
 ) -> Result<serde_json::Value, String> {
     if !executable.is_absolute() {
-        return Err("HERDR_T3_ADAPTER must be an absolute executable path".to_owned());
+        return Err("the T3 adapter must be an absolute executable path".to_owned());
     }
     let input =
         serde_json::to_vec(params).map_err(|_| "could not encode adapter request".to_owned())?;
@@ -76,11 +93,16 @@ async fn invoke(
         }
         Ok(value)
     };
-    match tokio::time::timeout(Duration::from_secs(120), operation).await {
+    let deadline = if matches!(params, ExternalAgentParams::List) {
+        5
+    } else {
+        120
+    };
+    match tokio::time::timeout(Duration::from_secs(deadline), operation).await {
         Ok(result) => result.map_err(str::to_owned),
         Err(_) => {
             let _ = child.kill().await;
-            Err("T3 adapter timed out; retry prompts only with the same clientRequestId".to_owned())
+            Err("T3 adapter timed out; inspect start results before retrying, and reuse clientRequestId for other mutations".to_owned())
         }
     }
 }

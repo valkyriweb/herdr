@@ -42,6 +42,10 @@ pub struct ErrorBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
+    AgentCatalog {
+        agents: Vec<super::AgentCatalogEntry>,
+        diagnostics: Vec<super::AgentBackendDiagnostic>,
+    },
     ExternalAgent {
         data: serde_json::Value,
     },

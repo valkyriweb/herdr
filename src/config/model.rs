@@ -1039,6 +1039,8 @@ impl ImeCursorShape {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
+    /// Absolute executable implementing the T3 adapter protocol. Omitted disables T3.
+    pub t3_adapter: Option<std::path::PathBuf>,
     /// Windows: allow ordinary same-account clients to control an elevated server. Default: false.
     #[cfg(windows)]
     pub allow_unelevated_clients: bool,
@@ -1314,6 +1316,7 @@ impl<'de> Deserialize<'de> for ToastConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            t3_adapter: None,
             #[cfg(windows)]
             allow_unelevated_clients: false,
             headless_cols: crate::config::DEFAULT_HEADLESS_COLS,
@@ -1982,6 +1985,7 @@ delay_seconds = {}
     #[test]
     fn server_headless_size_defaults_and_parses() {
         let default_config = Config::default();
+        assert!(default_config.server.t3_adapter.is_none());
         assert_eq!(
             default_config.server.headless_cols,
             crate::config::DEFAULT_HEADLESS_COLS
@@ -1993,11 +1997,16 @@ delay_seconds = {}
 
         let config: Config = toml::from_str(
             r#"[server]
+t3_adapter = "/opt/approved/bifrost"
 headless_cols = 160
 headless_rows = 50
 "#,
         )
         .unwrap();
+        assert_eq!(
+            config.server.t3_adapter.as_deref(),
+            Some(std::path::Path::new("/opt/approved/bifrost"))
+        );
         assert_eq!(config.server.headless_cols, 160);
         assert_eq!(config.server.headless_rows, 50);
 

@@ -1,41 +1,64 @@
 ---
 title: 外部エージェント
-description: ターミナルペインを使わずに T3 Code のスレッドを一覧表示、読み取り、プロンプト送信します。
+description: ターミナルペインなしで T3 Code のスレッドを開始、読み取り、停止、再開します。
 ---
 
-T3 Code のスレッドには `herdr agent external` からアクセスできます。各スレッドの
-ID は `t3:<thread>` の形式です。接頭辞の後は不透明な識別子で、コロンを含む場合が
-あります。これらのエージェントにはターミナル、ワークスペース、タブ、ペインの割り当てがありません。
+T3 Code のスレッドは通常の `herdr agent` コマンドで操作できます。ID は
+`t3:<thread>` です。接頭辞以降はコロンを含む場合もある不透明な識別子です。
+ターミナル、ワークスペース、タブ、ペインは割り当てられません。
 
-Herdr サーバーの環境変数 `HERDR_T3_ADAPTER` に、`bifrost t3 request` をサポートする
-Bifrost 実行ファイルの絶対パスを設定してください。アダプタープロセスはサーバーの
-環境変数を継承します。`T3_MCP_ENDPOINT` と承認済みの `T3_MCP_TOKEN` は既存の
-認証情報管理の仕組みで渡してください。Herdr は認証情報の発行、クライアントの
-ペアリング、リスナーの起動を行いません。実行ファイルが未設定の場合、外部エージェントは無効です。
+Herdr の設定で承認済み Bifrost 実行ファイルの絶対パスを指定します。
 
-```sh
-herdr agent external list
-herdr agent external status 't3:<thread>'
-herdr agent external read 't3:<thread>'
-herdr agent external read 't3:<thread>' 100
-printf '%s' 'Your prompt' | herdr agent external prompt 't3:<thread>' 'unique-request-id'
+```toml
+[server]
+t3_adapter = "/absolute/path/to/bifrost"
 ```
 
-読み取り結果にはタイムラインのカーソルと切り詰め情報が含まれます。`hasMore` が
-true の場合は `nextPosition` を渡して続きを取得します。プロンプトは実行中の作業の
-後にキューへ追加されます。結果が不明な場合は同じリクエスト ID と本文で再試行し、
-新しいプロンプトには新しい ID を使ってください。受理は完了を意味しません。
-ステータスには T3 の実行状態、アクティブな実行 ID、保留中の入力数が保持されます。
+実行ファイルは `bifrost t3 request` に対応する必要があります。
+`HERDR_T3_ADAPTER` はこの設定より優先されます。アダプターはサーバーの環境を
+継承するため、既存の認証情報管理で `T3_MCP_ENDPOINT` と承認済みの
+`T3_MCP_TOKEN` を設定してください。Herdr は認証情報を発行しません。
+設定がなければ T3 は無効です。メッセージ配信とリスナーの監視は Bifrost が担当します。
 
-対応する JSON API は `agent.external` です。パラメーターは
-`{"action":"list"}`、`{"action":"status","target":"t3:<thread>"}`、
-`{"action":"read","target":"t3:<thread>","afterPosition":100}`、または
-`{"action":"prompt","target":"t3:<thread>","text":"...","clientRequestId":"..."}` です。
-レスポンスの型は `external_agent` で、アダプターからの `data` オブジェクトを含みます。
+```sh
+herdr agent list
+herdr agent start worker --kind t3 --scratch --provider codex --model MODEL
+herdr agent start worker --kind t3 --project PROJECT_ID --provider codex --model MODEL --text 'Initial task'
+herdr agent status 't3:<thread>'
+herdr agent read 't3:<thread>' --after-position 100
+herdr agent prompt 't3:<thread>' 'Your prompt' --client-request-id prompt-1
+herdr agent stop 't3:<thread>' --client-request-id stop-1
+herdr agent resume 't3:<thread>' --client-request-id resume-1
+```
 
-外部呼び出しは API 接続ワーカーで実行され、制限時間は 2 分、出力上限は 8 MiB です。
-タイムアウトしたプロンプトも、すでに受理されている可能性があります。アダプターは
-シェルコマンドではなく標準入力から JSON を受け取ります。フォーカスや send-keys
-などのターミナル専用操作は利用できません。既存の `agent.list`、ターミナルスナップショット、
-第 1 世代クライアントのエンドポイントは公開済みの形式を維持します。この API は
-サーバーの JSON ソケットから利用でき、TUI ペインや Herdr Projects のボード項目は追加しません。
+開始にはプロバイダーのインスタンス、モデル、およびプロジェクト ID または
+`--scratch` が必要です。開始操作には冪等性保証がないため、タイムアウト後は
+再試行する前に一覧を確認してください。自動再試行は行いません。
+
+プロンプトは現在の処理の後にキューへ入ります。停止は実行中の処理を中断して
+キューを保留し、再開は保留を解除します。プロンプト、停止、再開の結果が不明な
+場合は、同じリクエスト ID と内容で再試行してください。受付は完了を意味しません。
+`status` と `read` で状態を確認します。T3 はターミナルの wait、focus、attach、
+send-keys 操作には対応しません。
+
+読み取り結果にはカーソルと切り詰め情報が含まれます。`hasMore` が true の場合は
+`nextPosition` を `--after-position` に渡します。画面ソース、ANSI、行数制限は
+利用できません。状態には T3 の実行状態、実行 ID、入力待ち件数が含まれます。
+
+`agent list` はサーバーの `agent_catalog` 機能を確認します。対応サーバーでは
+バックエンド、機能、正規化された状態、任意のターミナル配置を返します。
+T3 に接続できなくても、診断情報とターミナルエージェント一覧は返ります。
+旧サーバーでは従来のターミナル一覧を返します。対応サーバーでは CLI の JSON
+形式が変わるため、従来のターミナルフィールドが必要なスクリプトは、変更のない
+JSON ソケットメソッド `agent.list` を直接呼び出してください。
+
+JSON API の `agent.external` は `list`、`status`、`read`、`prompt`、`start`、
+`stop`、`resume` を受け付けます。開始は `title`、`projectId` または `scratch`、
+`modelSelection: {instanceId, model}`、任意の `text` を使います。変更操作は
+`target` と `clientRequestId` を使い、プロンプトには `text` も必要です。
+読み取りには任意の `afterPosition` を指定できます。結果の型は `external_agent`、
+アダプターの応答は `data` に入ります。既存の `agent external` コマンドも利用できます。
+
+出力上限は 8 MiB、一覧の制限時間は 5 秒、その他は 2 分です。既存の JSON
+ターミナル API と世代 1 エンドポイントの形式は変わりません。TUI ペインや
+Herdr Projects ボード項目は作成されません。

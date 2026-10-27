@@ -281,3 +281,216 @@ fn prompt_wait_is_sent_as_one_agent_request() {
     server.join().unwrap();
     cleanup_test_base(&base);
 }
+
+#[test]
+fn t3_lifecycle_and_prompts_use_the_adapter_without_a_pane() {
+    let cases = [
+        (
+            vec![
+                "agent",
+                "start",
+                "worker",
+                "--kind",
+                "t3",
+                "--scratch",
+                "--provider",
+                "codex",
+                "--model",
+                "fixture",
+            ],
+            serde_json::json!({"action":"start","title":"worker","scratch":true,"modelSelection":{"instanceId":"codex","model":"fixture"}}),
+        ),
+        (
+            vec![
+                "agent",
+                "stop",
+                "t3:thread:opaque",
+                "--client-request-id",
+                "stop-1",
+            ],
+            serde_json::json!({"action":"stop","target":"t3:thread:opaque","clientRequestId":"stop-1"}),
+        ),
+        (
+            vec![
+                "agent",
+                "resume",
+                "t3:thread:opaque",
+                "--client-request-id",
+                "resume-1",
+            ],
+            serde_json::json!({"action":"resume","target":"t3:thread:opaque","clientRequestId":"resume-1"}),
+        ),
+        (
+            vec![
+                "agent",
+                "prompt",
+                "t3:thread:opaque",
+                "literal $(echo text)",
+                "--client-request-id",
+                "prompt-1",
+            ],
+            serde_json::json!({"action":"prompt","target":"t3:thread:opaque","text":"literal $(echo text)","clientRequestId":"prompt-1"}),
+        ),
+        (
+            vec![
+                "agent",
+                "read",
+                "t3:thread:opaque",
+                "--after-position",
+                "42",
+            ],
+            serde_json::json!({"action":"read","target":"t3:thread:opaque","afterPosition":42}),
+        ),
+        (
+            vec!["agent", "status", "t3:thread:opaque"],
+            serde_json::json!({"action":"status","target":"t3:thread:opaque"}),
+        ),
+    ];
+    for (args, expected) in cases {
+        let base = unique_test_dir();
+        fs::create_dir_all(&base).unwrap();
+        let socket = base.join("herdr.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, line) = accept_fake_cli_operation(&listener);
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "agent.external");
+            assert_eq!(request["params"], expected);
+            writeln!(stream, "{}", serde_json::json!({"id":request["id"],"result":{"type":"external_agent","data":{"receipt":"fixture-receipt"}}})).unwrap();
+        });
+        let result = run_cli(&socket, &args);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let output: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(output["result"]["data"]["receipt"], "fixture-receipt");
+        server.join().unwrap();
+        cleanup_test_base(&base);
+    }
+}
+
+#[test]
+fn t3_rejects_unsupported_options_before_connecting_or_mutating() {
+    let base = unique_test_dir();
+    let socket = base.join("absent.sock");
+    for args in [
+        vec!["agent", "start", "worker", "--kind", "t3", "--scratch"],
+        vec![
+            "agent",
+            "start",
+            "worker",
+            "--kind",
+            "t3",
+            "--scratch",
+            "--project",
+            "project",
+            "--provider",
+            "codex",
+            "--model",
+            "fixture",
+        ],
+        vec!["agent", "prompt", "t3:thread", "hello"],
+        vec![
+            "agent",
+            "prompt",
+            "t3:thread",
+            "hello",
+            "--client-request-id",
+            "key",
+            "--wait",
+        ],
+        vec!["agent", "focus", "t3:thread"],
+    ] {
+        let output = run_cli(&socket, &args);
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(!error.contains("server_not_running"), "{error}");
+        assert!(
+            error.contains("T3") || error.contains("projectId"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn agent_list_negotiates_catalog_and_retains_old_server_fallback() {
+    for supports_catalog in [false, true] {
+        let base = unique_test_dir();
+        fs::create_dir_all(&base).unwrap();
+        let socket = base.join("herdr.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let ping: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(ping["method"], "ping");
+            writeln!(stream, "{}", serde_json::json!({"id":ping["id"],"result":{"type":"pong","version":"fixture","protocol":CURRENT_PROTOCOL,"capabilities":{"live_handoff":false,"agent_catalog":supports_catalog}}})).unwrap();
+            stream.flush().unwrap();
+            let (mut stream, line) = accept_fake_cli_operation(&listener);
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(
+                request["method"],
+                if supports_catalog {
+                    "agent.catalog"
+                } else {
+                    "agent.list"
+                }
+            );
+            let result = if supports_catalog {
+                serde_json::json!({
+                    "type": "agent_catalog",
+                    "agents": [
+                        {"id":"pane-1","backend":"terminal","name":"terminal worker",
+                         "status":"idle","capabilities":["read","prompt","stop"],
+                         "placement":{"terminal_id":"terminal-1","workspace_id":"workspace-1",
+                                      "tab_id":"tab-1","pane_id":"pane-1"}},
+                        {"id":"t3:thread-1","backend":"t3","name":"T3 worker",
+                         "status":"working","capabilities":["read","prompt","stop","resume"]}
+                    ],
+                    "diagnostics": []
+                })
+            } else {
+                serde_json::json!({"type":"agent_list","agents":[]})
+            };
+            writeln!(
+                stream,
+                "{}",
+                serde_json::json!({"id":request["id"],"result":result})
+            )
+            .unwrap();
+        });
+        let result = run_cli(&socket, &["agent", "list"]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let output: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        let result = &output["result"];
+        if supports_catalog {
+            assert_eq!(result["type"], "agent_catalog");
+            assert_eq!(result["agents"].as_array().unwrap().len(), 2);
+            assert_eq!(result["agents"][0]["placement"]["pane_id"], "pane-1");
+            assert_eq!(result["agents"][1]["id"], "t3:thread-1");
+            assert!(result["agents"][1].get("placement").is_none());
+            assert_eq!(result["agents"][1]["status"], "working");
+            assert_eq!(
+                result["agents"][1]["capabilities"],
+                serde_json::json!(["read", "prompt", "stop", "resume"])
+            );
+            assert_eq!(result["diagnostics"], serde_json::json!([]));
+        } else {
+            assert_eq!(
+                result,
+                &serde_json::json!({"type":"agent_list","agents":[]})
+            );
+        }
+        server.join().unwrap();
+        cleanup_test_base(&base);
+    }
+}

@@ -43,4 +43,7 @@ pub struct ServerCapabilities {
     /// Supports connection-scoped `server.ssh_agent.register` on the local JSON API.
     #[serde(default)]
     pub ssh_agent_registration: bool,
+    /// Supports the pane-independent JSON agent catalog.
+    #[serde(default)]
+    pub agent_catalog: bool,
 }
