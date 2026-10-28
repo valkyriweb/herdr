@@ -819,6 +819,66 @@ fn codex_osc_title_plain_is_idle() {
 }
 
 #[test]
+fn codex_hooks_review_startup_dialog_is_blocked() {
+    let screens = [
+        "  Hooks need review\n  5 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n› 1. Review hooks\n  2. Trust all and continue\n  enter confirm · esc skip",
+        "  Hooks need review\n  5 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n  1. Review hooks\n› 2. Trust all and continue\n  enter confirm · esc skip",
+    ];
+
+    for screen in screens {
+        let result = osc_explain(Agent::Codex, screen, "project", "");
+
+        assert_eq!(result.state, AgentState::Blocked, "screen: {screen}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("hooks_review_dialog"),
+            "screen: {screen}"
+        );
+        assert!(result.visible_blocker, "screen: {screen}");
+    }
+}
+
+#[test]
+fn codex_hooks_review_list_is_blocked() {
+    let screen =
+        "  ⚠ 5 hooks need review before they can run.\n  t trust all · enter review · esc close";
+    let result = osc_explain(Agent::Codex, screen, "project", "");
+
+    assert_eq!(result.state, AgentState::Blocked);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("hooks_review_list")
+    );
+    assert!(result.visible_blocker);
+}
+
+#[test]
+fn codex_hooks_review_phrases_alone_do_not_block() {
+    let screens = [
+        ">_ OpenAI Codex (v0.164.0)\n› Ask Codex to do anything\n  gpt-6.1-sol medium",
+        "Hooks need review",
+        "Finding: Codex shows \"Hooks need review\" when hooks change",
+        "Codex docs mention trust all and continue, then enter confirm",
+        "don't trust all · enter review · esc close",
+    ];
+
+    for screen in screens {
+        let result = osc_explain(Agent::Codex, screen, "llm-proxy", "");
+        assert_eq!(result.state, AgentState::Idle, "screen: {screen}");
+        assert_ne!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("hooks_review_dialog"),
+            "screen: {screen}"
+        );
+        assert_ne!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("hooks_review_list"),
+            "screen: {screen}"
+        );
+    }
+}
+
+#[test]
 fn codex_trust_directory_requires_live_top_region() {
     let screen = "> You are in C:\\Users\\user\\project\n\n\
         Do you trust the contents of this\n\

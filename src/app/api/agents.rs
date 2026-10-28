@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_prompt_rejects_blocked_agent_without_writing() {
+    async fn agent_prompt_rejects_codex_hooks_dialog_without_writing() {
         let mut app = app_with_agent();
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
@@ -486,7 +486,10 @@ mod tests {
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
-        terminal.set_detected_state(Some(Agent::GithubCopilot), AgentState::Blocked);
+        let screen = "  Hooks need review\n  5 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n  1. Review hooks\n› 2. Trust all and continue\n  enter confirm · esc skip";
+        let detection = crate::detect::manifest::explain(Agent::Codex, screen);
+        assert_eq!(detection.state, AgentState::Blocked);
+        terminal.set_detected_state(Some(Agent::Codex), detection.state);
         let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
         app.state.insert_test_runtime(pane_id, runtime);
 
