@@ -125,7 +125,16 @@ impl App {
                 id,
                 "agent_blocked",
                 format!(
-                    "agent {} is blocked and requires interactive input",
+                    "agent {} is blocked and requires interactive input. \
+                     The prompt was not sent or queued. \
+                     Inspect the dialog with `herdr agent read TARGET --source detection --format text` \
+                     and `herdr agent explain TARGET --json`; replace TARGET with the agent target. \
+                     Resolve it only within your existing authorization. \
+                     Do not trust hooks or approve actions without permission. \
+                     For Codex hooks review, use an authorized non-trusting skip/close option or ask the owner. \
+                     Then run `herdr agent wait TARGET --until idle --until done --timeout 15000`. \
+                     Only after that wait succeeds, resend the original prompt. \
+                     If the wait times out, inspect again instead of resending.",
                     params.target
                 ),
             ));
@@ -478,7 +487,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_prompt_rejects_blocked_agent_without_writing() {
+    async fn agent_prompt_rejects_codex_hooks_dialog_without_writing() {
         let mut app = app_with_agent();
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
@@ -486,7 +495,10 @@ mod tests {
             .clone();
         let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
         terminal.set_agent_name("reviewer".into());
-        terminal.set_detected_state(Some(Agent::GithubCopilot), AgentState::Blocked);
+        let screen = "  Hooks need review\n  5 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n  1. Review hooks\n› 2. Trust all and continue\n  enter confirm · esc skip";
+        let detection = crate::detect::manifest::explain(Agent::Codex, screen);
+        assert_eq!(detection.state, AgentState::Blocked);
+        terminal.set_detected_state(Some(Agent::Codex), detection.state);
         let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
         app.state.insert_test_runtime(pane_id, runtime);
 
@@ -502,6 +514,22 @@ mod tests {
 
         let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(error.error.code, "agent_blocked");
+        let guidance = &error.error.message;
+        for instruction in [
+            "not sent or queued",
+            "herdr agent read TARGET --source detection --format text",
+            "herdr agent explain TARGET --json",
+            "Do not trust hooks or approve actions without permission",
+            "authorized non-trusting skip/close option or ask the owner",
+            "herdr agent wait TARGET --until idle --until done --timeout 15000",
+            "Only after that wait succeeds, resend the original prompt",
+            "If the wait times out, inspect again instead of resending",
+        ] {
+            assert!(
+                guidance.contains(instruction),
+                "missing recovery instruction: {instruction}"
+            );
+        }
         assert!(
             tokio::time::timeout(
                 AGENT_PROMPT_SUBMIT_DELAY + Duration::from_millis(100),
