@@ -1,8 +1,8 @@
 use crate::api::schema::{
-    EmptyParams, Method, PaneFocusDirectionParams, PaneInputSetParams, PaneMoveParams,
-    PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneZoomParams, Request, TabCreateParams, TabListParams, TabRenameParams, TabTarget,
-    WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
+    EmptyParams, Method, PaneCloseExactParams, PaneFocusDirectionParams, PaneInputSetParams,
+    PaneMoveParams, PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams,
+    PaneTarget, PaneZoomParams, Request, TabCreateParams, TabListParams, TabRenameParams,
+    TabTarget, WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
     WorktreeCreateParams, WorktreeListParams, WorktreeOpenParams, WorktreeRemoveParams,
 };
 
@@ -116,6 +116,19 @@ pub(super) fn pane_swap(params: PaneSwapParams) -> std::io::Result<i32> {
 
 pub(super) fn pane_move(params: PaneMoveParams) -> std::io::Result<i32> {
     print_method_response("cli:pane:move", Method::PaneMove(params))
+}
+
+pub(super) fn pane_close_exact(
+    pane_id: String,
+    expect_terminal_id: String,
+) -> std::io::Result<i32> {
+    print_method_response(
+        "cli:pane:close_exact",
+        Method::PaneCloseExact(PaneCloseExactParams {
+            pane_id,
+            expect_terminal_id,
+        }),
+    )
 }
 
 pub(super) fn pane_close(pane_id: String) -> std::io::Result<i32> {

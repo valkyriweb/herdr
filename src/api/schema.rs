@@ -251,6 +251,9 @@ pub enum Method {
     PluginPaneFocus(PluginPaneFocusParams),
     #[serde(rename = "plugin.pane.close")]
     PluginPaneClose(PluginPaneCloseParams),
+    // Appended last: earlier variants keep their wire tags.
+    #[serde(rename = "pane.close_exact")]
+    PaneCloseExact(PaneCloseExactParams),
 }
 
 #[cfg(test)]

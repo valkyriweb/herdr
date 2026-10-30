@@ -1,9 +1,9 @@
 use bytes::Bytes;
 
 use crate::api::schema::{
-    EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams, PaneCopyMotion,
-    PaneCopyMotionParams, PaneCopySearchDirection, PaneCopySearchParams, PaneCurrentParams,
-    PaneDirection, PaneEdgesParams, PaneEdgesResult, PaneFocusDirectionParams,
+    EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams, PaneCloseExactParams,
+    PaneCopyMotion, PaneCopyMotionParams, PaneCopySearchDirection, PaneCopySearchParams,
+    PaneCurrentParams, PaneDirection, PaneEdgesParams, PaneEdgesResult, PaneFocusDirectionParams,
     PaneFocusDirectionReason, PaneFocusDirectionResult, PaneInfo, PaneInputSetParams,
     PaneLayoutPane, PaneLayoutParams, PaneLayoutRect, PaneLayoutSnapshot, PaneLayoutSplit,
     PaneListParams, PaneMoveDestination, PaneMoveParams, PaneMoveReason, PaneMoveResult,
@@ -1958,6 +1958,50 @@ impl App {
 
     pub(super) fn handle_pane_close(&mut self, id: String, target: PaneTarget) -> String {
         match self.close_pane(id.clone(), &target) {
+            Ok(()) => encode_success(id, ResponseResult::Ok {}),
+            Err(response) => response,
+        }
+    }
+
+    /// Close one pane only when this request can prove it destroys no terminal but the
+    /// expected one. The checks and the close run inside one request handler, so no
+    /// other request can change the topology between them.
+    pub(super) fn handle_pane_close_exact(
+        &mut self,
+        id: String,
+        params: PaneCloseExactParams,
+    ) -> String {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        let Some(terminal_id) = self.state.terminal_id_for_pane(ws_idx, pane_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        if terminal_id.to_string() != params.expect_terminal_id {
+            return encode_error(
+                id,
+                "terminal_mismatch",
+                format!(
+                    "pane {} no longer holds terminal {}",
+                    params.pane_id, params.expect_terminal_id
+                ),
+            );
+        }
+        if self.state.close_pane_would_close_workspace(ws_idx, pane_id)
+            && self.state.workspace_close_indices(ws_idx).len() != 1
+        {
+            return encode_error(
+                id,
+                "would_close_other_workspaces",
+                "closing this pane would also close other workspaces",
+            );
+        }
+        match self.close_pane(
+            id.clone(),
+            &PaneTarget {
+                pane_id: params.pane_id,
+            },
+        ) {
             Ok(()) => encode_success(id, ResponseResult::Ok {}),
             Err(response) => response,
         }

@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- `pane.close_exact` and `herdr pane close <pane_id> --exact --expect-terminal <terminal_id>` close one pane only if it still holds the expected terminal and no other workspace would close with it. Agents use it to close their own pane after a closeout without racing a pane id reuse.
 - The shared Pi integration now preserves native session identity for both vanilla `pi` and the customized `pii` launcher, including launcher-specific resume commands.
 
 ### Fixed

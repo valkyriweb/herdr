@@ -436,6 +436,15 @@ pub struct PaneClearAgentAuthorityParams {
     pub seq: Option<u64>,
 }
 
+/// Parameters for `pane.close_exact`: close one pane only if the server can prove, in the
+/// same request, that the pane still holds the expected terminal and that no other
+/// workspace would close with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneCloseExactParams {
+    pub pane_id: String,
+    pub expect_terminal_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneReleaseAgentParams {
     pub pane_id: String,

@@ -1002,16 +1002,27 @@ fn parse_pane_direction(value: &str) -> Result<PaneDirection, String> {
 }
 
 fn pane_close(args: &[String]) -> std::io::Result<i32> {
+    const USAGE: &str = "usage: herdr pane close <pane_id> [--exact --expect-terminal TERMINAL_ID]";
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane close <pane_id>");
+        eprintln!("{USAGE}");
         return Ok(2);
     };
-    if args.len() != 1 {
-        eprintln!("usage: herdr pane close <pane_id>");
-        return Ok(2);
+    if args.len() == 1 {
+        return super::runtime::pane_close(super::normalize_pane_id(raw_pane_id));
     }
-
-    super::runtime::pane_close(super::normalize_pane_id(raw_pane_id))
+    // --exact needs both flags; any other shape fails before a request is sent.
+    if args.len() == 4
+        && args[1] == "--exact"
+        && args[2] == "--expect-terminal"
+        && !args[3].is_empty()
+    {
+        return super::runtime::pane_close_exact(
+            super::normalize_pane_id(raw_pane_id),
+            args[3].clone(),
+        );
+    }
+    eprintln!("{USAGE}");
+    Ok(2)
 }
 
 fn pane_send_text(args: &[String]) -> std::io::Result<i32> {

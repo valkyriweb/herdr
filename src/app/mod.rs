@@ -3198,6 +3198,152 @@ mod tests {
         assert_eq!(app.state.workspaces.len(), 2);
     }
 
+    fn exact_close_membership(
+        key: &str,
+        checkout: &str,
+        is_linked_worktree: bool,
+    ) -> crate::workspace::WorktreeSpaceMembership {
+        crate::workspace::WorktreeSpaceMembership {
+            key: key.into(),
+            label: "herdr".into(),
+            repo_root: "/repo/herdr".into(),
+            checkout_path: checkout.into(),
+            is_linked_worktree,
+        }
+    }
+
+    /// Send `pane.close_exact` for workspace `ws_idx`'s root pane. `terminal_override`
+    /// replaces the expected terminal id when set.
+    fn exact_close(
+        app: &mut App,
+        ws_idx: usize,
+        terminal_override: Option<&str>,
+    ) -> serde_json::Value {
+        let pane = app.state.workspaces[ws_idx].tabs[0].root_pane;
+        let info = app.pane_info(ws_idx, pane).unwrap();
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_pane_close_exact".into(),
+            method: crate::api::schema::Method::PaneCloseExact(
+                crate::api::schema::PaneCloseExactParams {
+                    pane_id: info.pane_id,
+                    expect_terminal_id: terminal_override
+                        .map(str::to_owned)
+                        .unwrap_or(info.terminal_id),
+                },
+            ),
+        });
+        serde_json::from_str(&response).unwrap()
+    }
+
+    fn exact_close_app(workspaces: Vec<Workspace>, confirm_close: bool) -> App {
+        let mut app = test_app();
+        app.state.workspaces = workspaces;
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.confirm_close = confirm_close;
+        app
+    }
+
+    #[test]
+    fn pane_close_exact_closes_a_plain_sole_pane_workspace_and_nothing_else() {
+        let mut app = exact_close_app(
+            vec![Workspace::test_new("leaf"), Workspace::test_new("other")],
+            false,
+        );
+
+        let response = exact_close(&mut app, 0, None);
+
+        assert_eq!(response["result"]["type"], "ok");
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].display_name(), "other");
+    }
+
+    #[test]
+    fn pane_close_exact_refuses_a_terminal_that_is_not_the_expected_one() {
+        let mut app = exact_close_app(vec![Workspace::test_new("leaf")], false);
+
+        let response = exact_close(&mut app, 0, Some("term_not_this_one"));
+
+        assert_eq!(response["error"]["code"], "terminal_mismatch");
+        assert_eq!(app.state.workspaces.len(), 1);
+    }
+
+    #[test]
+    fn pane_close_exact_refuses_a_missing_pane() {
+        let mut app = exact_close_app(vec![Workspace::test_new("leaf")], false);
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_missing".into(),
+            method: crate::api::schema::Method::PaneCloseExact(
+                crate::api::schema::PaneCloseExactParams {
+                    pane_id: "w9999:p9999".into(),
+                    expect_terminal_id: "term_x".into(),
+                },
+            ),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(response["error"]["code"], "pane_not_found");
+    }
+
+    #[test]
+    fn pane_close_exact_refuses_a_parent_with_linked_children_even_when_confirmation_is_off() {
+        let mut parent = Workspace::test_new("parent");
+        parent.worktree_space = Some(exact_close_membership("repo-key", "/repo/herdr", false));
+        let mut child = Workspace::test_new("child");
+        child.worktree_space = Some(exact_close_membership("repo-key", "/repo/child", true));
+        let mut app = exact_close_app(vec![parent, child], false);
+
+        let response = exact_close(&mut app, 0, None);
+
+        assert_eq!(response["error"]["code"], "would_close_other_workspaces");
+        assert_eq!(app.state.workspaces.len(), 2);
+    }
+
+    #[test]
+    fn pane_close_exact_closes_only_a_linked_leaf_when_confirmation_is_off() {
+        let mut parent = Workspace::test_new("parent");
+        parent.worktree_space = Some(exact_close_membership("repo-key", "/repo/herdr", false));
+        let mut child = Workspace::test_new("child");
+        child.worktree_space = Some(exact_close_membership("repo-key", "/repo/child", true));
+        let mut app = exact_close_app(vec![parent, child], false);
+
+        let response = exact_close(&mut app, 1, None);
+
+        assert_eq!(response["result"]["type"], "ok");
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].display_name(), "parent");
+    }
+
+    #[test]
+    fn pane_close_exact_closes_one_of_two_root_workspaces_sharing_a_key() {
+        let mut first = Workspace::test_new("first");
+        first.worktree_space = Some(exact_close_membership("repo-key", "/repo/a", false));
+        let mut second = Workspace::test_new("second");
+        second.worktree_space = Some(exact_close_membership("repo-key", "/repo/b", false));
+        let mut app = exact_close_app(vec![first, second], false);
+
+        let response = exact_close(&mut app, 0, None);
+
+        assert_eq!(response["result"]["type"], "ok");
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].display_name(), "second");
+    }
+
+    #[test]
+    fn pane_close_exact_keeps_the_workspace_when_other_tabs_remain() {
+        let mut workspace = Workspace::test_new("tabs");
+        workspace.test_add_tab(Some("logs"));
+        let mut app = exact_close_app(vec![workspace], false);
+
+        let response = exact_close(&mut app, 0, None);
+
+        assert_eq!(response["result"]["type"], "ok");
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+    }
+
     #[test]
     fn session_dirty_flag_schedules_debounced_save() {
         let mut app = test_app();

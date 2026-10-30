@@ -2484,6 +2484,22 @@
           ],
           "type": "object"
         },
+        "PaneCloseExactParams": {
+          "description": "Parameters for `pane.close_exact`: close one pane only if the server can prove, in the\nsame request, that the pane still holds the expected terminal and that no other\nworkspace would close with it.",
+          "properties": {
+            "expect_terminal_id": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "expect_terminal_id"
+          ],
+          "type": "object"
+        },
         "PaneCopyMotion": {
           "enum": [
             "line_end",
@@ -6343,6 +6359,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PluginPaneCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.close_exact",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneCloseExactParams"
             }
           },
           "required": [

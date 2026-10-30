@@ -219,6 +219,7 @@ herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [
 herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]
 herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]
 herdr pane close <pane_id>
+herdr pane close <pane_id> --exact --expect-terminal <terminal_id>
 ```
 
 接受 `--current` 的窗格命令在 Herdr 窗格内运行时使用调用方的 `HERDR_PANE_ID`。对 `pane split` 而言，显式窗格 ID 或 `--pane ID` 拆分指定窗格。省略目标时，若存在 `HERDR_PANE_ID` 则拆分调用方窗格，否则使用当前聚焦的窗格。`--current` 必须有调用方窗格；缺少 `HERDR_PANE_ID` 时会报错。拆分响应中的新窗格 ID 位于 `.result.pane.pane_id`。
