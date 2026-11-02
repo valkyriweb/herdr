@@ -60,7 +60,9 @@ pub fn session_ref_from_report(
         return None;
     }
 
-    if matches!(agent, "pi" | "pii" | "omp") {
+    // pi, pii, omp, and prime-agent (pi-built) resume from a session file path,
+    // so prefer it and fall back to the id; every other agent resumes by id only.
+    if matches!(agent, "pi" | "pii" | "omp" | "prime-agent") {
         return agent_session_path
             .and_then(AgentSessionRef::path)
             .or_else(|| agent_session_id.and_then(AgentSessionRef::id));
@@ -104,7 +106,9 @@ pub fn session_ref_from_snapshot(
         return None;
     }
     let session_ref = match (agent, kind) {
-        ("pi" | "pii" | "omp", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
+        ("pi" | "pii" | "omp" | "prime-agent", AgentSessionRefKind::Path) => {
+            AgentSessionRef::path(value)?
+        }
         (_, AgentSessionRefKind::Id) => AgentSessionRef::id(value)?,
         _ => return None,
     };
@@ -155,6 +159,15 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         }
         ("herdr:pi", "pii", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             vec!["pii".into(), "--session".into(), session_ref.value.clone()]
+        }
+        ("herdr:pi", "prime-agent", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
+            // prime-agent is pi-built and reports under the herdr:pi source with
+            // its own label; it resumes natively via `prime-agent --resume <ref>`.
+            vec![
+                "prime-agent".into(),
+                "--resume".into(),
+                session_ref.value.clone(),
+            ]
         }
         ("herdr:omp", "omp", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             // omp resume is `-r, --resume=<value>` (ID prefix or path); it has no
@@ -210,6 +223,11 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:rusty", "rusty", AgentSessionRefKind::Id) => {
+            // Rusty's launcher reports the durable session name as the id and
+            // reopens it with `rusty --resume <name>`; it has no path form.
+            vec!["rusty".into(), "--resume".into(), session_ref.value.clone()]
+        }
         _ => return None,
     };
 
@@ -240,6 +258,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:mastracode", "mastracode")
             | ("herdr:pi", "pi")
             | ("herdr:pi", "pii")
+            | ("herdr:pi", "prime-agent")
             | ("herdr:hermes", "hermes")
             | ("herdr:opencode", "opencode")
             | ("herdr:qodercli", "qodercli")
@@ -248,6 +267,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:cursor", "cursor")
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
+            | ("herdr:rusty", "rusty")
     )
 }
 
@@ -392,6 +412,16 @@ mod tests {
         );
         assert_eq!(
             plan(
+                "herdr:pi",
+                "prime-agent",
+                &AgentSessionRef::id("prime-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["prime-agent", "--resume", "prime-session"]
+        );
+        assert_eq!(
+            plan(
                 "herdr:hermes",
                 "hermes",
                 &AgentSessionRef::id("hermes-session").unwrap()
@@ -477,6 +507,16 @@ mod tests {
             .unwrap()
             .argv,
             vec!["grok", "--resume", "grok-session"]
+        );
+        assert_eq!(
+            plan(
+                "herdr:rusty",
+                "rusty",
+                &AgentSessionRef::id("fc3c45bb-e1c6-41ab-9c81-f94a733bc1a8").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["rusty", "--resume", "fc3c45bb-e1c6-41ab-9c81-f94a733bc1a8"]
         );
     }
 
@@ -578,6 +618,32 @@ mod tests {
                 .is_none()
         );
 
+        // prime-agent reports under the herdr:pi source with its own label and,
+        // like pi, resumes from a session file path.
+        let prime_session = absolute_test_path("prime-session.jsonl");
+        let session_ref = session_ref_from_report(
+            "herdr:pi",
+            "prime-agent",
+            Some("prime-id".into()),
+            Some(prime_session.clone()),
+        )
+        .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Path);
+        assert_eq!(session_ref.value, prime_session);
+
+        let session_ref =
+            session_ref_from_report("herdr:pi", "prime-agent", Some("prime-id".into()), None)
+                .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "prime-id");
+        assert!(session_ref_from_report(
+            "herdr:pi",
+            "prime-agent",
+            None,
+            Some("relative.jsonl".into())
+        )
+        .is_none());
+
         assert!(
             session_ref_from_report("herdr:claude", "claude", None, Some(claude_session)).is_none()
         );
@@ -645,6 +711,29 @@ mod tests {
                 .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "agy-id");
+
+        // Rusty reports its durable session name as an id; a session path is
+        // ignored because `rusty --resume` only takes names.
+        let rusty_session = absolute_test_path("rusty-session.jsonl");
+        let session_ref = session_ref_from_report(
+            "herdr:rusty",
+            "rusty",
+            Some("rusty-id".into()),
+            Some(rusty_session.clone()),
+        )
+        .unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "rusty-id");
+        assert!(
+            session_ref_from_report("herdr:rusty", "rusty", None, Some(rusty_session)).is_none()
+        );
+        assert!(
+            session_ref_from_report("custom:rusty", "rusty", Some("rusty-id".into()), None)
+                .is_none()
+        );
+        assert!(
+            session_ref_from_report("herdr:pi", "rusty", Some("rusty-id".into()), None).is_none()
+        );
     }
 
     #[test]
@@ -806,6 +895,42 @@ mod tests {
             "herdr:antigravity_cli",
             "agy",
             &AgentSessionRef::path(&agy_session).unwrap()
+        )
+        .is_none());
+        let prime_session = absolute_test_path("prime-session.jsonl");
+        assert!(session_ref_from_snapshot(
+            "herdr:pi",
+            "prime-agent",
+            AgentSessionRefKind::Path,
+            &prime_session
+        )
+        .is_some());
+        assert!(session_ref_from_snapshot(
+            "herdr:pi",
+            "prime-agent",
+            AgentSessionRefKind::Id,
+            "prime-session"
+        )
+        .is_some());
+        assert!(session_ref_from_snapshot(
+            "herdr:rusty",
+            "rusty",
+            AgentSessionRefKind::Id,
+            "rusty-session"
+        )
+        .is_some());
+        let rusty_session = absolute_test_path("rusty-session");
+        assert!(session_ref_from_snapshot(
+            "herdr:rusty",
+            "rusty",
+            AgentSessionRefKind::Path,
+            &rusty_session
+        )
+        .is_none());
+        assert!(plan(
+            "herdr:rusty",
+            "rusty",
+            &AgentSessionRef::path(&rusty_session).unwrap()
         )
         .is_none());
     }
