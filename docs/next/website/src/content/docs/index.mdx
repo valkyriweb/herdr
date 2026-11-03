@@ -36,10 +36,10 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 If you already run an AI coding agent, let it handle the onboarding. Paste this prompt:
 
 ```text
-Help me understand and set up Herdr. Read https://herdr.dev/agent-guide.md first, then walk me through it step by step.
+Help me understand and set up Herdr. Its source and docs are at https://github.com/herdrdev/herdr. Read what you need there, then walk me through it step by step.
 ```
 
-The guide covers Herdr's concepts, setup, configuration, and common fixes, so your agent can answer from the docs instead of improvising.
+Your agent answers from the real source and docs instead of improvising.
 
 ## Core guides
 
@@ -48,6 +48,11 @@ The guide covers Herdr's concepts, setup, configuration, and common fixes, so yo
     See supported agents, detection behavior, integrations, custom labels, and direct attach.
 
     [Understand agents →](/docs/agents/)
+  </Card>
+  <Card title="Connecting machines">
+    Keep Local and saved SSH machines in one window, with a combined agent list and independent reconnects.
+
+    [Connect your machines →](/docs/connecting-machines/)
   </Card>
   <Card title="Session state">
     Understand detach, restart restore, pane history replay, native agent resume, and live handoff.

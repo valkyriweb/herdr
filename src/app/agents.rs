@@ -160,6 +160,8 @@ impl App {
         {
             return Err(AgentStartError::InvalidArgument);
         }
+        let persisted_agent_session =
+            crate::agent_resume::persisted_session_from_launch_args(kind, &params.args);
         let conflicts = self.agent_name_conflicts(&name, "");
         if !conflicts.is_empty() {
             return Err(AgentStartError::DuplicateName {
@@ -210,6 +212,10 @@ impl App {
             return Err(AgentStartError::InvalidTimeout);
         }
 
+        runtime
+            .validate_input_submission(&bytes)
+            .map_err(|err| AgentStartError::InputFailed(err.to_string()))?;
+
         let now = Instant::now();
         let terminal = self
             .state
@@ -220,6 +226,9 @@ impl App {
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             terminal.clear_agent_name();
             return Err(AgentStartError::InputFailed(err.to_string()));
+        }
+        if let Some(session) = persisted_agent_session {
+            terminal.set_managed_agent_launch_session(session);
         }
         self.state.mark_session_dirty();
         self.schedule_session_save();
@@ -373,7 +382,7 @@ impl App {
         if !terminal.is_agent_terminal() {
             return None;
         }
-        let pane = self.pane_info(ws_idx, pane_id)?;
+        let pane = self.pane_metadata(ws_idx, pane_id)?;
         Some(crate::api::schema::AgentInfo {
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),
@@ -394,6 +403,7 @@ impl App {
             launch_pending: terminal.managed_agent_launch_pending(),
             interactive_ready: terminal.managed_agent_interactive_ready(),
             state_change_seq: terminal.last_agent_state_change_seq.unwrap_or(0),
+            completion_seq: terminal.last_agent_completion_seq,
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,
             revision: pane.revision,

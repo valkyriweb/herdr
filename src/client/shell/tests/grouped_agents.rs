@@ -68,7 +68,7 @@ fn grouped_state(
     assert!(state.set_agent_view(view("boot-1", SOURCE, token)));
     state.set_snapshot(Box::new(grouped_snapshot(agents)));
     state.set_pane_surface(surface());
-    let frame = state.compose(106, 30).expect("grouped sidebar frame");
+    let frame = state.compose(106, 30).expect("grouped sidebar frame").frame;
     (state, frame)
 }
 
@@ -164,7 +164,7 @@ fn grouped_sidebar_renders_headings_counts_attention_and_other_last() {
     let (state, frame) = grouped_state(standard_agents(), Some(TOKEN));
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▾ alpha 3 !2", "▾ beta 2", "▾ Other 2 !1"]
+        vec!["▾ alpha 3 !1", "▾ beta 2", "▾ Other 2"]
     );
     // Rows keep server order under their headings; the heading rows are hit targets of their own.
     assert_eq!(
@@ -219,7 +219,7 @@ fn clicking_a_heading_folds_and_unfolds_without_any_endpoint_action() {
     let frame = state.compose(106, 30).expect("folded frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▸ alpha 3 !2", "▾ beta 2", "▾ Other 2 !1"]
+        vec!["▸ alpha 3 !1", "▾ beta 2", "▾ Other 2"]
     );
     assert_eq!(visible_agents(&state), vec!["b1", "b2", "x1", "x2"]);
     assert_eq!(
@@ -235,7 +235,7 @@ fn clicking_a_heading_folds_and_unfolds_without_any_endpoint_action() {
     let frame = state.compose(106, 30).expect("refolded frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▾ alpha 3 !2", "▾ beta 2", "▸ Other 2 !1"]
+        vec!["▾ alpha 3 !1", "▾ beta 2", "▸ Other 2"]
     );
     assert_eq!(visible_agents(&state), vec!["a1", "a2", "a3", "b1", "b2"]);
 }
@@ -265,7 +265,7 @@ fn all_groups_folded_lists_only_headings_with_counts() {
     let frame = state.compose(106, 30).expect("all folded frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▸ alpha 3 !2", "▸ beta 2", "▸ Other 2 !1"]
+        vec!["▸ alpha 3 !1", "▸ beta 2", "▸ Other 2"]
     );
     assert!(state.hits.agents.is_empty());
     assert_eq!(state.hits.agent_group_headings.len(), 3);
@@ -330,7 +330,7 @@ fn keyboard_focus_agent_reveals_a_folded_target_group() {
     let frame = state.compose(106, 30).expect("revealed frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▸ alpha 3 !2", "▾ beta 2", "▾ Other 2 !1"]
+        vec!["▸ alpha 3 !1", "▾ beta 2", "▾ Other 2"]
     );
     assert_eq!(visible_agents(&state), vec!["b1", "b2", "x1", "x2"]);
 }
@@ -488,7 +488,7 @@ fn clearing_the_view_removes_headings_and_restoring_it_keeps_session_folds() {
     let frame = state.compose(106, 30).expect("restored frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▾ alpha 3 !2", "▸ beta 2", "▾ Other 2 !1"]
+        vec!["▾ alpha 3 !1", "▸ beta 2", "▾ Other 2"]
     );
 
     // Another owner starts with every group open; another token groups by that token instead.
@@ -540,7 +540,7 @@ fn agent_view_control_before_the_snapshot_of_a_new_boot_applies_and_stale_contro
     let frame = state.compose(106, 30).expect("new boot frame");
     assert_eq!(
         heading_rows(&state, &frame),
-        vec!["▾ alpha 3 !2", "▾ beta 2", "▾ Other 2 !1"],
+        vec!["▾ alpha 3 !1", "▾ beta 2", "▾ Other 2"],
         "control received before the snapshot groups it, with folds reset for the new boot"
     );
     assert!(state.agent_group_folds.is_empty());
