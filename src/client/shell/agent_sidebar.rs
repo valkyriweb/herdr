@@ -10,11 +10,11 @@ use ratatui::{
 
 use super::*;
 
-struct AgentRow {
-    pane_id: String,
-    status: crate::api::schema::AgentStatus,
-    focused: bool,
-    rows: Vec<Vec<crate::ui::ResolvedToken>>,
+pub(super) struct AgentRow {
+    pub(super) pane_id: String,
+    pub(super) status: crate::api::schema::AgentStatus,
+    pub(super) focused: bool,
+    pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
 }
 
 /// Identity of one agent group. `None` is the final group of agents without the group token.
@@ -267,8 +267,62 @@ pub(super) fn render_agent_panel(
     group: Option<AgentGroupRender<'_>>,
     hits: &mut ShellHitMap,
 ) {
-    if area.height == 0 {
+    if !render_agent_panel_header(
+        buffer,
+        area,
+        snapshot.agent_view_label.as_deref(),
+        config,
+        hits,
+    ) {
         return;
+    }
+
+    let rows = agent_items(snapshot, config, group);
+    render_agent_list(
+        buffer,
+        area,
+        &rows,
+        snapshot
+            .agent_view_label
+            .as_ref()
+            .map(|_| " no matching agents"),
+        config,
+        agent_scroll,
+        hits,
+        |item| item.height() as usize,
+        // Headings sit directly on their first row, so only agent rows are separated by the gap.
+        |item| matches!(item, AgentItem::Agent(_)),
+        |buffer, rect, item, hits| match item {
+            AgentItem::Heading {
+                key,
+                label,
+                agents,
+                attention,
+                folded,
+                focused,
+            } => {
+                hits.agent_group_headings.push((rect, key.clone()));
+                render_group_heading(
+                    buffer, rect, label, *agents, *attention, *folded, *focused, config,
+                );
+            }
+            AgentItem::Agent(row) => {
+                hits.agents.push((rect, row.pane_id.clone()));
+                render_agent_row(buffer, rect, row, config);
+            }
+        },
+    );
+}
+
+pub(super) fn render_agent_panel_header(
+    buffer: &mut Buffer,
+    area: Rect,
+    agent_view_label: Option<&str>,
+    config: &ClientShellConfig,
+    hits: &mut ShellHitMap,
+) -> bool {
+    if area.height == 0 {
+        return false;
     }
     put_text(
         buffer,
@@ -279,7 +333,7 @@ pub(super) fn render_agent_panel(
         Style::default().fg(config.palette.surface_dim),
     );
     if area.height < 2 {
-        return;
+        return false;
     }
     put_text(
         buffer,
@@ -291,14 +345,10 @@ pub(super) fn render_agent_panel(
             .fg(config.palette.overlay0)
             .add_modifier(Modifier::BOLD),
     );
-    let sort_label =
-        snapshot
-            .agent_view_label
-            .as_deref()
-            .unwrap_or(match config.agent_panel_sort {
-                crate::config::AgentPanelSortConfig::Spaces => "spaces",
-                crate::config::AgentPanelSortConfig::Priority => "priority",
-            });
+    let sort_label = agent_view_label.unwrap_or(match config.agent_panel_sort {
+        crate::config::AgentPanelSortConfig::Spaces => "grouped",
+        crate::config::AgentPanelSortConfig::Priority => "priority",
+    });
     let sort_width = display_width(sort_label).min(area.width as usize) as u16;
     let sort_rect = Rect::new(
         area.right().saturating_sub(sort_width),
@@ -318,15 +368,28 @@ pub(super) fn render_agent_panel(
         sort_rect.width,
         sort_label,
         Style::default()
-            .fg(if snapshot.agent_view_label.is_some() {
+            .fg(if agent_view_label.is_some() {
                 config.palette.accent
             } else {
                 config.palette.overlay0
             })
             .add_modifier(Modifier::BOLD),
     );
+    true
+}
 
-    let rows = agent_items(snapshot, config, group);
+pub(super) fn render_agent_list<T>(
+    buffer: &mut Buffer,
+    area: Rect,
+    rows: &[T],
+    empty_message: Option<&str>,
+    config: &ClientShellConfig,
+    agent_scroll: &mut usize,
+    hits: &mut ShellHitMap,
+    row_lines: impl Fn(&T) -> usize,
+    gap_after_row: impl Fn(&T) -> bool,
+    mut render_row: impl FnMut(&mut Buffer, Rect, &T, &mut ShellHitMap),
+) {
     let body = Rect::new(
         area.x,
         area.y.saturating_add(3),
@@ -336,13 +399,13 @@ pub(super) fn render_agent_panel(
     hits.agent_body = body;
     if body.is_empty() || rows.is_empty() {
         *agent_scroll = 0;
-        if !body.is_empty() && snapshot.agent_view_label.is_some() {
+        if let Some(message) = empty_message.filter(|_| !body.is_empty()) {
             put_text(
                 buffer,
                 body.x,
                 body.y,
                 body.width,
-                " no matching agents",
+                message,
                 Style::default()
                     .fg(config.palette.overlay0)
                     .add_modifier(Modifier::DIM),
@@ -351,16 +414,21 @@ pub(super) fn render_agent_panel(
         return;
     }
 
-    let row_heights = rows.iter().map(AgentItem::height).collect::<Vec<_>>();
-    // Headings sit directly on their first row, so only agent rows are separated by the gap.
-    let gap_after = |index: usize| {
-        if index + 1 < rows.len() && matches!(rows[index], AgentItem::Agent(_)) {
-            config.agents.row_gap
-        } else {
-            0
-        }
-    };
-    let gaps = (0..rows.len()).map(gap_after).collect::<Vec<_>>();
+    let row_heights = rows
+        .iter()
+        .map(|row| row_lines(row).max(1).min(u16::MAX as usize) as u16)
+        .collect::<Vec<_>>();
+    let gaps = rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            if index + 1 < rows.len() && gap_after_row(row) {
+                config.agents.row_gap
+            } else {
+                0
+            }
+        })
+        .collect::<Vec<_>>();
     let metrics =
         super::scroll::list_scroll_metrics(&row_heights, &gaps, body.height, *agent_scroll);
     hits.agent_max_scroll = metrics.max_offset_from_bottom;
@@ -371,32 +439,20 @@ pub(super) fn render_agent_panel(
     let show_scrollbar = metrics.max_offset_from_bottom > 0 && body.width > 1;
     let content_width = body.width.saturating_sub(u16::from(show_scrollbar));
     let mut y = body.y;
-    for (index, item) in rows.iter().enumerate().skip(*agent_scroll) {
-        let height = item.height().min(body.height);
+    for (index, row) in rows.iter().enumerate().skip(*agent_scroll) {
+        let height = row_heights[index].min(body.height);
         if y.saturating_add(height) > body.bottom() {
             break;
         }
         let rect = Rect::new(body.x, y, content_width, height);
-        match item {
-            AgentItem::Heading {
-                key,
-                label,
-                agents,
-                attention,
-                folded,
-                focused,
-            } => {
-                hits.agent_group_headings.push((rect, key.clone()));
-                render_group_heading(
-                    buffer, rect, label, *agents, *attention, *folded, *focused, config,
-                );
-            }
-            AgentItem::Agent(row) => {
-                hits.agents.push((rect, row.pane_id.clone()));
-                render_agent_row(buffer, rect, row, config);
-            }
-        }
-        y = y.saturating_add(height).saturating_add(gap_after(index));
+        render_row(buffer, rect, row, hits);
+        y = y.saturating_add(height).saturating_add(
+            if index + 1 < rows.len() && gap_after_row(row) {
+                config.agents.row_gap
+            } else {
+                0
+            },
+        );
     }
 
     if show_scrollbar {
@@ -406,12 +462,23 @@ pub(super) fn render_agent_panel(
     }
 }
 
+pub(super) fn agent_rows(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    machine: Option<&str>,
+) -> Vec<AgentRow> {
+    ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
+        .into_iter()
+        .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine))
+        .collect()
+}
+
 fn agent_items(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
     group: Option<AgentGroupRender<'_>>,
 ) -> Vec<AgentItem> {
-    let rows = agent_rows(snapshot, config);
+    let rows = agent_rows(snapshot, config, None);
     let Some(group) = group else {
         return rows.into_iter().map(AgentItem::Agent).collect();
     };
@@ -449,78 +516,6 @@ fn agent_items(
         }
     }
     items
-}
-
-fn agent_rows(snapshot: &ClientShellSnapshot, config: &ClientShellConfig) -> Vec<AgentRow> {
-    ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
-        .into_iter()
-        .filter_map(|pane_id| {
-            let agent = snapshot
-                .agents
-                .iter()
-                .find(|agent| agent.pane_id == pane_id)?;
-            let workspace = snapshot
-                .workspaces
-                .iter()
-                .find(|workspace| workspace.workspace_id == agent.workspace_id)?;
-            let tab = snapshot.tabs.iter().find(|tab| tab.tab_id == agent.tab_id);
-            let pane = snapshot
-                .panes
-                .iter()
-                .find(|pane| pane.pane_id == agent.pane_id);
-            let tab_count = snapshot
-                .tabs
-                .iter()
-                .filter(|candidate| candidate.workspace_id == agent.workspace_id)
-                .count();
-            let tab_label = tab
-                .filter(|tab| tab_count > 1 || tab.custom_label)
-                .map(|tab| tab.label.as_str());
-            let agent_label = agent
-                .display_agent
-                .as_deref()
-                .or(agent.name.as_deref())
-                .or(agent.agent.as_deref())
-                .or(agent.title.as_deref());
-            let labels = agent
-                .state_labels
-                .iter()
-                .cloned()
-                .collect::<HashMap<_, _>>();
-            let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
-            let state_text = labels
-                .get(status_text(agent.agent_status))
-                .map(String::as_str)
-                .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
-            let canonical_agent = agent
-                .agent
-                .as_deref()
-                .and_then(crate::detect::parse_agent_label);
-            let rows = crate::ui::sidebar_agent_rows(
-                &config.agents,
-                crate::ui::AgentTokenContext {
-                    workspace: &workspace.label,
-                    tab: tab_label,
-                    pane: agent
-                        .title
-                        .as_deref()
-                        .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
-                    agent_label,
-                    terminal_title: agent.terminal_title.as_deref(),
-                    terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
-                    canonical_agent,
-                    tokens: &tokens,
-                },
-                state_text,
-            );
-            Some(AgentRow {
-                pane_id: agent.pane_id.clone(),
-                status: agent.agent_status,
-                focused: agent.focused,
-                rows,
-            })
-        })
-        .collect()
 }
 
 #[allow(clippy::too_many_arguments)] // Why: one heading is drawn from its already-derived facts.
@@ -582,7 +577,85 @@ fn render_group_heading(
         .render(rect, buffer);
 }
 
-fn render_agent_row(buffer: &mut Buffer, rect: Rect, row: &AgentRow, config: &ClientShellConfig) {
+pub(super) fn agent_row(
+    snapshot: &ClientShellSnapshot,
+    pane_id: &str,
+    config: &ClientShellConfig,
+    machine: Option<&str>,
+) -> Option<AgentRow> {
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == pane_id)?;
+    let workspace = snapshot
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.workspace_id == agent.workspace_id)?;
+    let tab = snapshot.tabs.iter().find(|tab| tab.tab_id == agent.tab_id);
+    let pane = snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.pane_id == agent.pane_id);
+    let tab_count = snapshot
+        .tabs
+        .iter()
+        .filter(|candidate| candidate.workspace_id == agent.workspace_id)
+        .count();
+    let tab_label = tab
+        .filter(|tab| tab_count > 1 || tab.custom_label)
+        .map(|tab| tab.label.as_str());
+    let agent_label = agent
+        .display_agent
+        .as_deref()
+        .or(agent.name.as_deref())
+        .or(agent.agent.as_deref())
+        .or(agent.title.as_deref());
+    let labels = agent
+        .state_labels
+        .iter()
+        .cloned()
+        .collect::<HashMap<_, _>>();
+    let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    let state_text = labels
+        .get(status_text(agent.agent_status))
+        .map(String::as_str)
+        .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
+    let canonical_agent = agent
+        .agent
+        .as_deref()
+        .and_then(crate::detect::parse_agent_label);
+    let rows = crate::ui::sidebar_agent_rows(
+        &config.agents,
+        crate::ui::AgentTokenContext {
+            machine,
+            workspace: &workspace.label,
+            tab: tab_label,
+            pane: agent
+                .title
+                .as_deref()
+                .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
+            agent_label,
+            terminal_title: agent.terminal_title.as_deref(),
+            terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
+            canonical_agent,
+            tokens: &tokens,
+        },
+        state_text,
+    );
+    Some(AgentRow {
+        pane_id: agent.pane_id.clone(),
+        status: agent.agent_status,
+        focused: agent.focused,
+        rows,
+    })
+}
+
+pub(super) fn render_agent_row(
+    buffer: &mut Buffer,
+    rect: Rect,
+    row: &AgentRow,
+    config: &ClientShellConfig,
+) {
     let palette = &config.palette;
     let row_style = if row.focused {
         Style::default().bg(palette.active_row_bg)
@@ -598,16 +671,8 @@ fn render_agent_row(buffer: &mut Buffer, rect: Rect, row: &AgentRow, config: &Cl
             .fg(palette.subtext0)
             .add_modifier(Modifier::BOLD)
     };
-    let status_style = Style::default()
-        .fg(status_color(row.status, palette))
-        .add_modifier(if row.focused {
-            Modifier::empty()
-        } else {
-            Modifier::DIM
-        });
-    let secondary = Style::default()
-        .fg(palette.overlay0)
-        .add_modifier(Modifier::DIM);
+    let status_style = Style::default().fg(status_color(row.status, palette));
+    let secondary = Style::default().fg(palette.overlay0);
     let icon = (
         status_icon(row.status, config.status_indicators),
         Style::default().fg(status_color(row.status, palette)),

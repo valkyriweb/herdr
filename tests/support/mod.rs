@@ -7,6 +7,8 @@ use std::sync::{Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use portable_pty::CommandBuilder;
+
 static PID_REGISTRY: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
 static RUNTIME_DIR_REGISTRY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 static INIT: Once = Once::new();
@@ -24,6 +26,11 @@ const CLIENT_MESSAGE_CLIENT_SHELL_PANE_INPUT: u32 = 13;
 const CLIENT_MESSAGE_CLIENT_SHELL_FOCUS: u32 = 18;
 const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
 
+pub fn isolate_herdr_test_process(command: &mut CommandBuilder) {
+    command.env_remove("HERDR_STARTUP_CWD");
+    command.env_remove("HERDR_SESSION");
+}
+
 pub fn register_spawned_herdr_pid(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;
@@ -32,6 +39,19 @@ pub fn register_spawned_herdr_pid(pid: Option<u32>) {
     ensure_cleanup_hooks();
     let mut registry = pid_registry_lock();
     registry.insert(pid);
+}
+
+/// Asks a spawned herdr process to exit. portable-pty's `kill` sends SIGHUP,
+/// which the server deliberately ignores.
+pub fn stop_spawned_herdr(child: &mut (dyn portable_pty::Child + Send + Sync)) {
+    match child.process_id() {
+        Some(pid) => unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        },
+        None => {
+            let _ = child.kill();
+        }
+    }
 }
 
 pub fn unregister_spawned_herdr_pid(pid: Option<u32>) {
@@ -444,9 +464,13 @@ pub fn wait_for_message_variants(
     timeout: Duration,
     variants: &[u32],
 ) -> Result<bool, String> {
-    stream
-        .set_read_timeout(Some(Duration::from_millis(200)))
-        .map_err(|e| e.to_string())?;
+    let read_timeout = Some(Duration::from_millis(200));
+    // Darwin can reject resetting the timeout after peer closure with queued data.
+    if stream.read_timeout().map_err(|e| e.to_string())? != read_timeout {
+        stream
+            .set_read_timeout(read_timeout)
+            .map_err(|e| e.to_string())?;
+    }
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         match read_server_message(stream) {
@@ -749,12 +773,14 @@ fn runtime_dir_owner_alive(runtime_dir: &Path) -> bool {
     process_exists(owner_pid)
 }
 
-fn current_checkout_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-}
-
 fn is_test_herdr_binary(path: &Path) -> bool {
-    path.ends_with("target/debug/herdr") && path.starts_with(current_checkout_root())
+    // /proc resolves executable symlinks. Match only this Cargo build, including
+    // custom target directories; binary identity alone never grants ownership.
+    static TEST_BINARY: OnceLock<Option<PathBuf>> = OnceLock::new();
+    TEST_BINARY
+        .get_or_init(|| fs::canonicalize(env!("CARGO_BIN_EXE_herdr")).ok())
+        .as_deref()
+        .is_some_and(|binary| path == binary)
 }
 
 extern "C" fn run_atexit_cleanup() {
@@ -877,19 +903,48 @@ mod tests {
     }
 
     #[test]
-    fn test_binary_matcher_accepts_current_checkout_debug_binary() {
-        let binary = current_checkout_root().join("target/debug/herdr");
+    fn watchdog_scoping_preserves_registered_live_owner() {
+        let runtime_dir = unique_missing_runtime_dir("live-owner");
+        fs::create_dir_all(&runtime_dir).unwrap();
+        fs::write(
+            runtime_dir.join(RUNTIME_OWNER_MARKER),
+            std::process::id().to_string(),
+        )
+        .unwrap();
+        let registered_runtime_dirs = HashSet::from([runtime_dir.clone()]);
+        let should_terminate = should_terminate_runtime_dir(&runtime_dir, &registered_runtime_dirs);
+        fs::remove_dir_all(runtime_dir).unwrap();
+        assert!(!should_terminate, "a live test owner must remain protected");
+    }
+
+    #[test]
+    fn test_binary_matcher_accepts_cargo_test_binary() {
+        let binary = std::fs::canonicalize(env!("CARGO_BIN_EXE_herdr"))
+            .expect("Cargo-built binary must exist");
         assert!(
             is_test_herdr_binary(&binary),
-            "current checkout debug binary should be considered test-owned"
+            "Cargo-built binary should be considered test-owned regardless of target directory"
         );
     }
 
     #[test]
-    fn test_binary_matcher_rejects_installed_binary() {
-        assert!(
-            !is_test_herdr_binary(Path::new("/home/can/.local/bin/herdr")),
-            "installed binaries must not be considered test-owned"
-        );
+    fn test_binary_matcher_rejects_other_binaries() {
+        let nested_build = Path::new(env!("CARGO_MANIFEST_DIR")).join("other/target/debug/herdr");
+        let sibling_build = Path::new(env!("CARGO_BIN_EXE_herdr"))
+            .parent()
+            .unwrap()
+            .join("other-build/herdr");
+        for binary in [
+            Path::new("/home/can/.local/bin/herdr"),
+            Path::new("/tmp/other-checkout/target/debug/herdr"),
+            nested_build.as_path(),
+            sibling_build.as_path(),
+        ] {
+            assert!(
+                !is_test_herdr_binary(binary),
+                "other binaries must not be considered test-owned: {}",
+                binary.display()
+            );
+        }
     }
 }

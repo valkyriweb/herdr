@@ -3,10 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::api::client::{ApiClient, ApiClientError};
-use crate::api::schema::{
-    AgentStatus, ClientWindowTitleSetParams, EmptyParams, Method, PaneAgentState, ReadFormat,
-    ReadSource, Request, SplitDirection,
-};
+use crate::api::schema::{Method, Request};
 
 macro_rules! print {
     ($($arg:tt)*) => {{
@@ -22,22 +19,26 @@ macro_rules! println {
     }};
 }
 
-mod agent;
+pub(crate) mod agent;
 mod api;
 mod completion;
 mod integration;
-mod notification;
-mod pane;
-mod plugin;
+mod machine;
+pub(crate) mod notification;
+pub(crate) mod pane;
+pub(crate) mod plugin;
+pub(crate) mod projection;
 mod protocol_guard;
-mod runtime;
 mod server;
 mod server_not_running;
 mod spec;
 mod status;
-mod tab;
+pub(crate) mod tab;
+mod target;
+mod title;
 mod workspace;
-mod worktree;
+pub(crate) mod workspace_bindings;
+pub(crate) mod worktree;
 
 const TERMINAL_SESSION_OBSERVE_USAGE: &str =
     "usage: herdr terminal session observe <target> [--cols N] [--rows N]";
@@ -45,12 +46,10 @@ const TERMINAL_SESSION_CONTROL_USAGE: &str =
     "usage: herdr terminal session control <target> [--takeover] [--cols N] [--rows N]";
 pub(crate) const AGENT_HELP_FOOTER: &str = concat!(
     "Are you an AI? Use these resources ONLY IF your task specifically asks you to:\n",
-    "  Help a human understand or set up Herdr for the first time:\n",
-    "    https://herdr.dev/agent-guide.md\n",
-    "  Debug or investigate a problem with Herdr:\n",
-    "    https://herdr.dev/llms.txt\n",
     "  Control Herdr panes, agents, or workspaces:\n",
-    "    SKIP if a Herdr skill is already in your context. Otherwise run: herdr --skill",
+    "    SKIP if a Herdr skill is already in your context. Otherwise run: herdr --skill\n",
+    "  Help a human understand or set up Herdr, or debug a problem with it:\n",
+    "    read the source and docs: https://github.com/herdrdev/herdr",
 );
 
 pub(crate) fn parse_token_assignment(raw: &str) -> Result<(String, Option<String>), String> {
@@ -92,6 +91,10 @@ pub(super) fn print_read_response(response: &serde_json::Value) -> std::io::Resu
     Ok(0)
 }
 
+pub(crate) fn maybe_run_machine(args: &[String]) -> Option<std::io::Result<CommandOutcome>> {
+    target::maybe_run(args)
+}
+
 pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
     let Some(command) = args.get(1).map(|arg| arg.as_str()) else {
         return Ok(CommandOutcome::NotCli);
@@ -99,6 +102,13 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
 
     if spec::print_requested_help(args)? {
         return Ok(CommandOutcome::Handled(0));
+    }
+
+    if args.len() == 2 {
+        if let Some(group) = api_group(command) {
+            eprintln!("{}", projection::group_commands(&group));
+            return Ok(CommandOutcome::Handled(2));
+        }
     }
 
     let exit_code = match command {
@@ -113,6 +123,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         "completion" | "completions" => completion::run_completion_command(&args[2..])?,
         "config" => run_config_command(&args[2..])?,
         "channel" => run_channel_command(&args[2..])?,
+        "machine" => machine::run_machine_command(&args[2..])?,
         "workspace" => workspace::run_workspace_command(&args[2..])?,
         "worktree" => worktree::run_worktree_command(&args[2..])?,
         "tab" => tab::run_tab_command(&args[2..])?,
@@ -127,6 +138,20 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
     };
 
     Ok(CommandOutcome::Handled(exit_code))
+}
+
+/// API-backed command groups, which list their commands when run without one.
+fn api_group(name: &str) -> Option<clap::Command> {
+    Some(match name {
+        "workspace" => workspace_bindings::command(),
+        "worktree" => worktree::command(),
+        "tab" => tab::command(),
+        "notification" => notification::command(),
+        "agent" => agent::command(),
+        "pane" => pane::command(),
+        "plugin" => plugin::command(),
+        _ => return None,
+    })
 }
 
 fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
@@ -677,40 +702,7 @@ fn parse_terminal_dimension(raw: &str, flag: &str) -> std::io::Result<u16> {
 }
 
 fn terminal_title(args: &[String]) -> std::io::Result<i32> {
-    match args.first().map(|arg| arg.as_str()) {
-        Some("set") => {
-            if args.len() != 2 {
-                eprintln!("usage: herdr terminal title set <title>");
-                return Ok(2);
-            }
-            print_response(&send_request(&Request {
-                id: "cli:terminal:title:set".into(),
-                method: Method::ClientWindowTitleSet(ClientWindowTitleSetParams {
-                    title: args[1].clone(),
-                }),
-            })?)
-        }
-        Some("clear") => {
-            if args.len() != 1 {
-                eprintln!("usage: herdr terminal title clear");
-                return Ok(2);
-            }
-            print_response(&send_request(&Request {
-                id: "cli:terminal:title:clear".into(),
-                method: Method::ClientWindowTitleClear(EmptyParams::default()),
-            })?)
-        }
-        Some("help" | "--help" | "-h") => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
-            Ok(0)
-        }
-        _ => {
-            eprintln!("usage: herdr terminal title set <title>");
-            eprintln!("       herdr terminal title clear");
-            Ok(2)
-        }
-    }
+    title::run(args)
 }
 
 pub(super) fn parse_attach_target(args: &[String], usage: &str) -> Result<(String, bool), i32> {
@@ -745,6 +737,27 @@ pub(super) fn print_response(response: &serde_json::Value) -> std::io::Result<i3
     Ok(0)
 }
 
+/// Sends a parsed request and prints its JSON response; parse failures never connect.
+fn run_json_request(request: Result<Request, projection::ParseError>) -> std::io::Result<i32> {
+    let request = match request {
+        Ok(request) => request,
+        Err(projection::ParseError::Usage(message)) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+        Err(projection::ParseError::Io(error)) => return Err(error),
+        Err(projection::ParseError::Clap(error)) => return print_clap_error(&error),
+    };
+    print_response(&send_request(&request)?)
+}
+
+/// Prints a Clap diagnostic or help page and returns its exit code.
+pub(super) fn print_clap_error(error: &clap::Error) -> std::io::Result<i32> {
+    crate::platform::begin_cli_output();
+    error.print()?;
+    Ok(error.exit_code())
+}
+
 pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {
     let response = send_request(&Request {
         id: "cli:request".into(),
@@ -760,7 +773,7 @@ pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {
 }
 
 pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {
-    let client = ApiClient::local();
+    let client = target::api_client()?;
     ensure_server_protocol_compatible(&client, &request.id)?;
     client
         .request_value(request)
@@ -768,24 +781,21 @@ pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Val
 }
 
 pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {
-    let client = ApiClient::local();
+    let client = target::api_client()?;
     client
         .request_value(request)
         .map_err(|err| map_server_not_running_or_io(err, &request.id, &client))
 }
 
 fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {
-    let status = client
-        .status()
+    let status = target::server_status(client)
         .map_err(|err| map_server_not_running_or_io(err, request_id, client))?;
     let server_protocol = status
         .protocol
         .ok_or_else(|| std::io::Error::other("server ping did not include a protocol version"))?;
-    let Some(response) = protocol_guard::mismatch_response(
-        request_id,
-        server_protocol,
-        &crate::session::active_restart_after_update_guidance(),
-    ) else {
+    let Some(response) =
+        protocol_guard::mismatch_response(request_id, server_protocol, &target::restart_guidance())
+    else {
         return Ok(());
     };
 
@@ -832,6 +842,9 @@ fn map_server_not_running_or_io(
     request_id: &str,
     client: &ApiClient,
 ) -> std::io::Error {
+    if target::is_remote() {
+        return target::remote_error(api_client_error_to_io(err));
+    }
     match err {
         ApiClientError::Io(io_err) if server_not_running_error(&io_err) => {
             server_not_running::reported_error(server_not_running::response(
@@ -860,63 +873,6 @@ pub(super) fn normalize_tab_id(value: &str) -> String {
 
 pub(super) fn normalize_pane_id(value: &str) -> String {
     value.to_string()
-}
-
-pub(super) fn parse_split_direction(value: &str) -> std::io::Result<SplitDirection> {
-    match value {
-        "right" => Ok(SplitDirection::Right),
-        "down" => Ok(SplitDirection::Down),
-        _ => Err(std::io::Error::other(format!(
-            "invalid split direction: {value}"
-        ))),
-    }
-}
-
-pub(super) fn parse_read_source(value: &str) -> std::io::Result<ReadSource> {
-    match value {
-        "visible" => Ok(ReadSource::Visible),
-        "recent" => Ok(ReadSource::Recent),
-        "recent-unwrapped" | "recent_unwrapped" => Ok(ReadSource::RecentUnwrapped),
-        "detection" => Ok(ReadSource::Detection),
-        _ => Err(std::io::Error::other(format!(
-            "invalid read source: {value}"
-        ))),
-    }
-}
-
-pub(super) fn parse_read_format(value: &str) -> std::io::Result<ReadFormat> {
-    match value {
-        "text" => Ok(ReadFormat::Text),
-        "ansi" => Ok(ReadFormat::Ansi),
-        _ => Err(std::io::Error::other(format!(
-            "invalid read format: {value}"
-        ))),
-    }
-}
-
-fn parse_agent_status(value: &str) -> std::io::Result<AgentStatus> {
-    match value {
-        "idle" => Ok(AgentStatus::Idle),
-        "working" => Ok(AgentStatus::Working),
-        "blocked" => Ok(AgentStatus::Blocked),
-        "done" => Ok(AgentStatus::Done),
-        "unknown" => Ok(AgentStatus::Unknown),
-        _ => Err(std::io::Error::other(format!(
-            "invalid agent status: {value} (expected idle, working, blocked, done, or unknown)"
-        ))),
-    }
-}
-
-pub(super) fn parse_pane_agent_state(value: &str) -> std::io::Result<PaneAgentState> {
-    match value {
-        "idle" => Ok(PaneAgentState::Idle),
-        "working" => Ok(PaneAgentState::Working),
-        "blocked" => Ok(PaneAgentState::Blocked),
-        "unknown" => Ok(PaneAgentState::Unknown),
-        _ => Err(std::io::Error::other(format!(
-            "invalid pane agent state: {value} (expected idle, working, blocked, or unknown)"
-        ))),
-    }
 }
 
 pub(super) fn parse_u32_flag(flag: &str, value: &str) -> std::io::Result<u32> {
@@ -964,8 +920,11 @@ fn parse_session_json_only(args: &[String], usage: &str) -> Result<bool, i32> {
 fn parse_session_name_and_json(args: &[String], usage: &str) -> Result<(String, bool), i32> {
     let mut name = None;
     let mut json = false;
+    let mut options_ended = false;
     for arg in args {
-        if arg == "--json" {
+        if !options_ended && arg == "--" {
+            options_ended = true;
+        } else if !options_ended && arg == "--json" {
             json = true;
         } else if name.is_none() {
             name = Some(arg.clone());
@@ -988,7 +947,9 @@ fn print_session_table(sessions: &[crate::session::SessionInfo]) {
         println!(
             "{:<20} {:<8} {:<48} {}",
             session.name,
-            if session.running {
+            if session.connection_error.is_some() {
+                "unavailable"
+            } else if session.running {
                 "running"
             } else {
                 "stopped"
@@ -996,6 +957,9 @@ fn print_session_table(sessions: &[crate::session::SessionInfo]) {
             session.session_dir,
             session.socket_path
         );
+        if let Some(error) = &session.connection_error {
+            println!("  {error}");
+        }
     }
 }
 
@@ -1083,6 +1047,16 @@ mod tests {
             super::channel_set_install_action(None),
             super::ChannelSetInstallAction::RunSelfUpdate
         );
+    }
+
+    #[test]
+    fn session_name_parser_accepts_option_terminator() {
+        for name in ["-h", "--json"] {
+            assert_eq!(
+                super::parse_session_name_and_json(&["--".to_string(), name.to_string()], "usage",),
+                Ok((name.to_string(), false))
+            );
+        }
     }
 
     #[test]
