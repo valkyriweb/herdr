@@ -46,6 +46,13 @@ class PlanTest(unittest.TestCase):
             rec = h.plan(term(["codex"], app="codex"), ["codex", "--profile", "p", "--yolo-ish", "task"])
         self.assertEqual(rec["argv"], ["codex", "resume", "xid", "--no-daemon", "-c", 'model_provider="openai"', "-m", "r/m"])
 
+    def test_prompt_words_are_never_taken_for_flags(self, _):
+        with mock.patch.object(h, "claude_session", return_value="cid"), mock.patch.object(h, "claude_model", return_value=None):
+            hc_argv = h.plan(term(["claude", "--model", "a b", "say --dangerously-skip-permissions"], app="claude-code"), [])
+            flat_ps = h.plan(term(["/bin/zsh"], app="claude-code"), ["claude", "fix", "--dangerously-skip-permissions"])
+        self.assertEqual(hc_argv["argv"], ["claude", "--resume", "cid", "--model", "a b"])
+        self.assertEqual(flat_ps["argv"], ["claude", "--resume", "cid"])
+
     def test_plain_programs_and_unknown_sessions_are_not_resumed(self, _):
         self.assertIsNone(h.plan(term(["python3", "app.py"]), []))
         with mock.patch.object(h, "codex_session", return_value=None):

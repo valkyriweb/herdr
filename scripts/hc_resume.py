@@ -52,6 +52,28 @@ KEEP = {
 }
 
 
+# Every flag these harnesses take a value for, so a value is never mistaken for a prompt.
+VALUED = {f for flags in KEEP.values() for f, v in flags.items() if v} | {
+    "--session",
+    "--session-id",
+    "--resume",
+    "-r",
+    "--name",
+    "-n",
+    "--append-system-prompt",
+    "--system-prompt",
+    "--profile",
+    "-p",
+    "-a",
+    "--ask-for-approval",
+    "-C",
+    "--cd",
+    "--settings",
+    "--mcp-config",
+    "--session-dir",
+}
+
+
 def run(argv: list[str]) -> str:
     return subprocess.run(argv, check=True, capture_output=True, text=True).stdout
 
@@ -61,17 +83,13 @@ def hc_json(*args: str):
 
 
 def tokens(argv: list[str]) -> list[str]:
-    """argv, with sh -c script strings split so wrapped launches are visible too."""
-    out: list[str] = []
-    for arg in argv:
-        if " " in arg or "\n" in arg:
-            try:
-                out.extend(shlex.split(arg, comments=True))
-            except ValueError:
-                out.append(arg)
-        else:
-            out.append(arg)
-    return out
+    """argv, with only a shell wrapper's -c script split, so wrapped launches are visible too."""
+    if len(argv) >= 3 and os.path.basename(argv[0]) in SHELLS and argv[1] == "-c":
+        try:
+            return argv[:2] + shlex.split(argv[2], comments=True) + argv[3:]
+        except ValueError:
+            pass
+    return list(argv)
 
 
 def harness_of(agent: str | None, toks: list[str]) -> str | None:
@@ -96,21 +114,43 @@ def flag_value(toks: list[str], *flags: str) -> str | None:
     return None
 
 
-def kept_flags(kind: str, toks: list[str]) -> list[str]:
-    """Known option flags from the original launch; prompts and session flags are dropped."""
+def options(kind: str, toks: list[str]) -> list[str]:
+    """The launch's option tokens: after the harness name, up to the first operand (a prompt).
+
+    Words inside a prompt are never read as flags. Codex's own "resume <id>" is skipped.
+    """
+    names = [os.path.basename(t) for t in toks]
+    aliases = ("pi", "pii") if kind in ("pi", "pii") else (kind,)
+    start = next((i + 1 for i, n in enumerate(names) if n in aliases), len(toks))
+    out: list[str] = []
+    i = start
+    while i < len(toks):
+        t = toks[i]
+        if not t.startswith("-"):
+            if kind == "codex" and t == "resume":
+                i += 2 if i + 1 < len(toks) and UUID.fullmatch(toks[i + 1]) else 1
+                continue
+            break
+        if t in VALUED and i + 1 < len(toks):
+            out += [t, toks[i + 1]]
+            i += 2
+            continue
+        out.append(t)
+        i += 1
+    return out
+
+
+def kept_flags(kind: str, opts: list[str]) -> list[str]:
+    """Known option flags from the launch options; session flags and unknown flags are dropped."""
     keep = KEEP["pi" if kind == "pii" else kind]
     out: list[str] = []
     i = 0
-    while i < len(toks):
-        t = toks[i]
-        name = t.split("=", 1)[0]
-        if name in keep:
-            if keep[name] and "=" not in t and i + 1 < len(toks):
-                out += [t, toks[i + 1]]
-                i += 2
-                continue
-            out.append(t)
-        i += 1
+    while i < len(opts):
+        t = opts[i]
+        valued = t in VALUED
+        if t.split("=", 1)[0] in keep:
+            out += opts[i : i + 2] if valued else [t]
+        i += 2 if valued else 1
     return out
 
 
@@ -212,6 +252,7 @@ def plan(term: dict, proc_args: list[str]) -> dict | None:
         return None
     # The running process's own argv is the best record, unless it hid it (pi retitles itself).
     toks = ps_toks if harness_of(None, ps_toks) and any(ps_toks[1:]) else hc_toks
+    opts = options(kind, toks)
     cwd = fg.get("cwd") or term.get("cwd")
     pid = fg.get("pid")
     labels = term.get("labels") or {}
@@ -220,18 +261,18 @@ def plan(term: dict, proc_args: list[str]) -> dict | None:
         adir = agent_dir(pid)
         if adir and os.path.basename(adir.rstrip("/")) == "pii":
             kind = "pii"
-        sid = flag_value(toks, "--session-id", "--session")
+        sid = flag_value(opts, "--session-id", "--session")
         source = "argv"
         if not sid and labels.get("harbor.harness-session-id"):
             sid, source = labels["harbor.harness-session-id"], "label"
         if not sid:
             sid, source = pi_newest(kind, cwd, adir), "newest-in-cwd"
-        argv = [kind, "--session", sid] + kept_flags(kind, toks) if sid else None
+        argv = [kind, "--session", sid] + kept_flags(kind, opts) if sid else None
     elif kind == "claude":
         sid, source = claude_session(pid), "claude-pid-file"
         if not sid:
-            sid, source = flag_value(toks, "--session-id", "--resume", "-r"), "argv"
-        flags = kept_flags("claude", toks)
+            sid, source = flag_value(opts, "--session-id", "--resume", "-r"), "argv"
+        flags = kept_flags("claude", opts)
         if sid and "--model" not in flags and (m := claude_model(sid)):
             flags += ["--model", m]
         argv = ["claude", "--resume", sid] + flags if sid else None
@@ -240,7 +281,7 @@ def plan(term: dict, proc_args: list[str]) -> dict | None:
         if not sid and "resume" in toks:
             nxt = toks[toks.index("resume") + 1 :]
             sid, source = (nxt[0] if nxt and UUID.fullmatch(nxt[0]) else None), "argv"
-        flags = kept_flags("codex", toks)
+        flags = kept_flags("codex", opts)
         if "--no-daemon" not in flags:
             flags.append("--no-daemon")
         provider, model = codex_meta(sid) if sid else (None, None)
