@@ -92,8 +92,20 @@ def tokens(argv: list[str]) -> list[str]:
     return list(argv)
 
 
-def harness_of(agent: str | None, toks: list[str]) -> str | None:
-    names = [os.path.basename(t) for t in toks]
+def command_names(toks: list[str]) -> list[str]:
+    """Executable names only: argv[0], and the command a shell -c wrapper runs. Never prompt words."""
+    names = [os.path.basename(toks[0])] if toks else []
+    if len(toks) >= 3 and names[0] in SHELLS and toks[1] == "-c":
+        for t in toks[2:]:
+            if t in ("exec", "env", "command") or "=" in t:
+                continue
+            names.append(os.path.basename(t))
+            break
+    return names
+
+
+def harness_of(agent: str | None, *argvs: list[str]) -> str | None:
+    names = [n for toks in argvs for n in command_names(toks)]
     if "pii" in names:
         return "pii"
     if agent in ("pi", "claude", "codex"):
@@ -119,9 +131,12 @@ def options(kind: str, toks: list[str]) -> list[str]:
 
     Words inside a prompt are never read as flags. Codex's own "resume <id>" is skipped.
     """
-    names = [os.path.basename(t) for t in toks]
     aliases = ("pi", "pii") if kind in ("pi", "pii") else (kind,)
-    start = next((i + 1 for i, n in enumerate(names) if n in aliases), len(toks))
+    names = command_names(toks)
+    if not names or names[-1] not in aliases:
+        return []
+    # argv[0], or for a shell -c wrapper the position of the command it runs.
+    start = 1 if len(names) == 1 else next(i for i in range(2, len(toks)) if os.path.basename(toks[i]) == names[-1]) + 1
     out: list[str] = []
     i = start
     while i < len(toks):
@@ -152,6 +167,10 @@ def kept_flags(kind: str, opts: list[str]) -> list[str]:
             out += opts[i : i + 2] if valued else [t]
         i += 2 if valued else 1
     return out
+
+
+def has_flag(flags: list[str], *names: str) -> bool:
+    return any(f.split("=", 1)[0] in names for f in flags)
 
 
 def pi_slug(cwd: str) -> str:
@@ -247,7 +266,7 @@ def plan(term: dict, proc_args: list[str]) -> dict | None:
     """Decide one terminal's resume command from what hc and the OS report. Pure apart from session lookups."""
     fg = term.get("foreground") or {}
     hc_toks, ps_toks = tokens(term.get("argv") or []), tokens(proc_args)
-    kind = harness_of((term.get("status") or {}).get("app") or term.get("agent"), hc_toks + ps_toks)
+    kind = harness_of((term.get("status") or {}).get("app") or term.get("agent"), hc_toks, ps_toks)
     if not kind:
         return None
     # The running process's own argv is the best record, unless it hid it (pi retitles itself).
@@ -273,7 +292,7 @@ def plan(term: dict, proc_args: list[str]) -> dict | None:
         if not sid:
             sid, source = flag_value(opts, "--session-id", "--resume", "-r"), "argv"
         flags = kept_flags("claude", opts)
-        if sid and "--model" not in flags and (m := claude_model(sid)):
+        if sid and not has_flag(flags, "--model") and (m := claude_model(sid)):
             flags += ["--model", m]
         argv = ["claude", "--resume", sid] + flags if sid else None
     else:
@@ -287,7 +306,7 @@ def plan(term: dict, proc_args: list[str]) -> dict | None:
         provider, model = codex_meta(sid) if sid else (None, None)
         if provider and not any("model_provider" in f for f in flags):
             flags += ["-c", f"model_provider={json.dumps(provider)}"]
-        if model and not ({"-m", "--model"} & set(flags)):
+        if model and not has_flag(flags, "-m", "--model"):
             flags += ["-m", model]
         argv = ["codex", "resume", sid] + flags if sid else None
     return {

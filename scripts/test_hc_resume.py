@@ -53,6 +53,13 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(hc_argv["argv"], ["claude", "--resume", "cid", "--model", "a b"])
         self.assertEqual(flat_ps["argv"], ["claude", "--resume", "cid"])
 
+    def test_prompt_naming_another_harness_and_inline_model(self, _):
+        rec = h.plan(term(["pi", "--model=m", "compare pi and pii"], app="pi", labels={"harbor.harness-session-id": "s"}), [])
+        self.assertEqual(rec["argv"], ["pi", "--session", "s", "--model=m"])
+        with mock.patch.object(h, "claude_session", return_value="cid"), mock.patch.object(h, "claude_model", return_value="x"):
+            rec = h.plan(term(["claude", "--model=haiku"], app="claude-code"), [])
+        self.assertEqual(rec["argv"], ["claude", "--resume", "cid", "--model=haiku"])
+
     def test_plain_programs_and_unknown_sessions_are_not_resumed(self, _):
         self.assertIsNone(h.plan(term(["python3", "app.py"]), []))
         with mock.patch.object(h, "codex_session", return_value=None):
